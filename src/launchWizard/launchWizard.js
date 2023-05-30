@@ -91,12 +91,7 @@ function updateTDMLAction() {
       'visibility: hidden;'
   }
 
-  if (tdmlSelectedValue === 'generate') {
-    document.getElementById('tdmlPath').style =
-      'margin-top: 10px; visibility: visible;'
-  } else {
-    document.getElementById('tdmlPath').style = 'visibility: hidden;'
-  }
+  document.getElementById('tdmlPath').style = 'visibility: hidden;'
 }
 
 // Function to update config selected, also display name input box if 'New Config' selected

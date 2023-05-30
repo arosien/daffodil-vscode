@@ -131,7 +131,7 @@ class ParseSuite extends FunSuite {
     assertEquals(parseResult.isLeft, true)
     assertEquals(
       parseResult.left.get.head,
-      "invalid 'tdmlConfig.action': 'InvalidAction', must be 'none', 'generate', 'append', or 'execute'"
+      "invalid 'tdmlConfig.action': 'InvalidAction', must be 'none' or 'execute'"
     )
     tdmlAction = "none"
   }
@@ -144,16 +144,7 @@ class ParseSuite extends FunSuite {
     assertEquals(parseResult.left.get.head, s"program file at $program doesn't exist")
   }
 
-  test("Parse failed - infosetOutputType not file") {
-    tdmlAction = "generate"
-    buildJson()
-    val parseResult = Parse.Debugee.LaunchArgs.parse(testJsonObject)
-    assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "'type' field in 'infosetOutput' must be set to 'file'")
-  }
-
   def buildJson(): Unit = {
-
     val infoset = new JsonObject()
     infoset.addProperty("type", infosetOutputType)
     infoset.addProperty("path", infosetOutputPath)

@@ -216,32 +216,6 @@ object Parse {
 
       sealed trait TDMLConfig extends LaunchArgs
       object TDMLConfig {
-        case class Generate(
-            schemaPath: Path,
-            dataPath: Path,
-            stopOnEntry: Boolean,
-            infosetFormat: String,
-            infosetOutput: LaunchArgs.InfosetOutput,
-            name: String,
-            description: String,
-            path: String,
-            variables: Map[String, String],
-            tunables: Map[String, String]
-        ) extends TDMLConfig
-
-        case class Append(
-            schemaPath: Path,
-            dataPath: Path,
-            stopOnEntry: Boolean,
-            infosetFormat: String,
-            infosetOutput: LaunchArgs.InfosetOutput,
-            name: String,
-            description: String,
-            path: String,
-            variables: Map[String, String],
-            tunables: Map[String, String]
-        ) extends TDMLConfig
-
         case class Execute(
             stopOnEntry: Boolean,
             infosetFormat: String,
@@ -286,7 +260,7 @@ object Parse {
     // }
     //
     // The action field is parsed first.
-    // If it is a valid action ('generate' | 'append' | 'execute'), create a LaunchArgs object of the appropriate type
+    // If it is a valid action ('execute'), create a LaunchArgs object of the appropriate type
     // If it is 'none' or missing, create a LaunchArgs.Manual object. This will ignore any other fields in the tdmlConfig object.
     //
     // arguments:  Launch config
@@ -305,32 +279,6 @@ object Parse {
           ).parMapN(LaunchArgs.Manual.apply)
         case Some(action) =>
           action.getAsString() match {
-            case "generate" =>
-              (
-                parseProgram(arguments),
-                parseData(arguments),
-                parseStopOnEntry(arguments),
-                parseInfosetFormat(arguments),
-                parseInfosetOutput(arguments, true),
-                parseTDMLName(tdmlConfig),
-                parseTDMLDescription(tdmlConfig),
-                parseTDMLPath(tdmlConfig),
-                parseVariables(arguments),
-                parseTunables(arguments)
-              ).parMapN(LaunchArgs.TDMLConfig.Generate.apply)
-            case "append" =>
-              (
-                parseProgram(arguments),
-                parseData(arguments),
-                parseStopOnEntry(arguments),
-                parseInfosetFormat(arguments),
-                parseInfosetOutput(arguments, true),
-                parseTDMLName(tdmlConfig),
-                parseTDMLDescription(tdmlConfig),
-                parseTDMLPath(tdmlConfig),
-                parseVariables(arguments),
-                parseTunables(arguments)
-              ).parMapN(LaunchArgs.TDMLConfig.Append.apply)
             case "execute" =>
               (
                 parseStopOnEntry(arguments),
@@ -354,7 +302,7 @@ object Parse {
               ).parMapN(LaunchArgs.Manual.apply)
             case invalidType =>
               Left(
-                s"invalid 'tdmlConfig.action': '$invalidType', must be 'none', 'generate', 'append', or 'execute'"
+                s"invalid 'tdmlConfig.action': '$invalidType', must be 'none' or 'execute'"
               ).toEitherNel
           }
       }
@@ -429,10 +377,7 @@ object Parse {
     //   eg. /path/to/<existing>/<non-existing>/file.tdml
     //
     // arguments:   Launch config
-    // requireFile: Whether or not the type field must be set to file. This is a requirement
-    //              for the TDML generate operation. Returns an error if this boolean
-    //              is set to True, and the type field is set to a value other than file
-    def parseInfosetOutput(arguments: JsonObject, requireFile: Boolean = false) =
+    def parseInfosetOutput(arguments: JsonObject) =
       Option(arguments.getAsJsonObject("infosetOutput")) match {
         case None => Right(LaunchArgs.InfosetOutput.Console).toEitherNel
         case Some(infosetOutput) =>
@@ -440,16 +385,8 @@ object Parse {
             case None => Right(LaunchArgs.InfosetOutput.Console).toEitherNel
             case Some(typ) =>
               typ.getAsString() match {
-                case "none" =>
-                  if (requireFile)
-                    Left("'type' field in 'infosetOutput' must be set to 'file'").toEitherNel
-                  else
-                    Right(LaunchArgs.InfosetOutput.None).toEitherNel
-                case "console" =>
-                  if (requireFile)
-                    Left("'type' field in 'infosetOutput' must be set to 'file'").toEitherNel
-                  else
-                    Right(LaunchArgs.InfosetOutput.Console).toEitherNel
+                case "none"    => Right(LaunchArgs.InfosetOutput.None).toEitherNel
+                case "console" => Right(LaunchArgs.InfosetOutput.Console).toEitherNel
                 case "file" =>
                   Option(infosetOutput.getAsJsonPrimitive("path"))
                     .toRight("missing 'infosetOutput.path' field from launch request")
@@ -566,72 +503,14 @@ object Parse {
     Debugee.LaunchArgs.parse(request.arguments).map {
       case args: Debugee.LaunchArgs.Manual => debugee(args)
       case Debugee.LaunchArgs.TDMLConfig
-            .Generate(
-              schemaPath,
-              dataPath,
-              stopOnEntry,
-              infosetFormat,
-              infosetOutput,
-              name,
-              description,
-              tdmlPath,
-              variables,
-              tunables
-            ) =>
-        // Create a LaunchArgs.Manual, run the debugee with it, and then generate the TDML file
-        debugee(
-          Debugee.LaunchArgs
-            .Manual(schemaPath, dataPath, stopOnEntry, infosetFormat, infosetOutput, variables, tunables)
-        ).onFinalize(
-          infosetOutput match {
-            case Debugee.LaunchArgs.InfosetOutput.File(path) =>
-              IO(TDML.generate(path, schemaPath, dataPath, name, description, tdmlPath))
-            case _ =>
-              // This case should never be hit. Validation is being done on launch config prior to
-              //   this section of code attempting to run a DFDL operation. If the user is trying to
-              //   generate a TDML file and an infosetOutput type of 'none' | 'console' is selected,
-              //   an error will be displayed, and the execution will be aborted, before the DFDL operation begins.
-              IO.unit
-          }
-        )
-      case Debugee.LaunchArgs.TDMLConfig
-            .Append(
-              schemaPath,
-              dataPath,
-              stopOnEntry,
-              infosetFormat,
-              infosetOutput,
-              name,
-              description,
-              tdmlPath,
-              variables,
-              tunables
-            ) =>
-        // Create a LaunchArgs.Manual, run the debugee with it, and then append to the existing TDML file
-        debugee(
-          Debugee.LaunchArgs
-            .Manual(schemaPath, dataPath, stopOnEntry, infosetFormat, infosetOutput, variables, tunables)
-        ).onFinalize(
-          infosetOutput match {
-            case Debugee.LaunchArgs.InfosetOutput.File(path) =>
-              IO(TDML.append(path, schemaPath, dataPath, name, description, tdmlPath))
-            case _ =>
-              // This case should never be hit. Validation is being done on launch config prior to
-              //   this section of code attempting to run a DFDL operation. If the user is trying to
-              //   append to a TDML file and an infosetOutput type of 'none' | 'console' is selected,
-              //   an error will be displayed, and the execution will be aborted, before the DFDL operation begins.
-              IO.unit
-          }
-        )
-      case Debugee.LaunchArgs.TDMLConfig
             .Execute(stopOnEntry, infosetFormat, infosetOutput, name, description, tdmlPath, variables, tunables) =>
         // From a TDML file, create a LaunchArgs.Manual from the named test, run the debugee with it
-        Resource.eval(IO(TDML.execute(name, description, tdmlPath))).flatMap {
+        Resource.eval(IO(TDML.execute(name, Paths.get(tdmlPath)))).flatMap {
           case None =>
             Resource.raiseError[IO, Debugee, Throwable](
               new RuntimeException(s"couldn't execute TDML with name $name, description $description, path $tdmlPath")
             )
-          case Some((schemaPath, dataPath)) =>
+          case Some(TDML.Execute(schemaPath, dataPath)) =>
             debugee(
               Debugee.LaunchArgs
                 .Manual(schemaPath, dataPath, stopOnEntry, infosetFormat, infosetOutput, variables, tunables)
@@ -1059,10 +938,6 @@ object Parse {
       object TDMLConfig {
         def apply(that: Debugee.LaunchArgs.TDMLConfig): TDMLConfig =
           that match {
-            case Debugee.LaunchArgs.TDMLConfig.Generate(_, _, _, _, _, name, description, path, _, _) =>
-              TDMLConfig("generate", name, description, path)
-            case Debugee.LaunchArgs.TDMLConfig.Append(_, _, _, _, _, name, description, path, _, _) =>
-              TDMLConfig("append", name, description, path)
             case Debugee.LaunchArgs.TDMLConfig.Execute(_, _, _, name, description, path, _, _) =>
               TDMLConfig("execute", name, description, path)
           }

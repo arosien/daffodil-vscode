@@ -150,18 +150,6 @@ export function activateDaffodilDebug(
       }
     ),
     vscode.commands.registerCommand(
-      'extension.dfdl-debug.generateTDML',
-      (resource: vscode.Uri) => {
-        createDebugRunFileConfigs(resource, 'run', 'generate')
-      }
-    ),
-    vscode.commands.registerCommand(
-      'extension.dfdl-debug.appendTDML',
-      (resource: vscode.Uri) => {
-        createDebugRunFileConfigs(resource, 'run', 'append')
-      }
-    ),
-    vscode.commands.registerCommand(
       'extension.dfdl-debug.executeTDML',
       (resource: vscode.Uri) => {
         createDebugRunFileConfigs(resource, 'run', 'execute')

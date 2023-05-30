@@ -141,11 +141,7 @@ export async function getDebugger(
         }
       }
 
-      if (
-        config.tdmlConfig.action === 'generate' ||
-        config.tdmlConfig.action === 'append' ||
-        config.tdmlConfig.action === 'execute'
-      ) {
+      if (config.tdmlConfig.action === 'execute') {
         if (
           config.tdmlConfig.name === undefined ||
           config.tdmlConfig.name.includes('${command:AskForTDMLName}')
@@ -168,14 +164,9 @@ export async function getDebugger(
           config.tdmlConfig.path === undefined ||
           config.tdmlConfig.path.includes('${command:AskForTDMLPath}')
         )
-          if (config.tdmlConfig.action === 'generate')
-            config.tdmlConfig.path = await vscode.commands.executeCommand(
-              'extension.dfdl-debug.getTDMLPath'
-            )
-          else
-            config.tdmlConfig.path = await vscode.commands.executeCommand(
-              'extension.dfdl-debug.getValidatedTDMLPath'
-            )
+          config.tdmlConfig.path = await vscode.commands.executeCommand(
+            'extension.dfdl-debug.getValidatedTDMLPath'
+          )
       }
 
       if (config.data === '') {
