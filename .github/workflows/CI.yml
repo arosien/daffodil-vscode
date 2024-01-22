@@ -20,6 +20,7 @@ on:
     branches-ignore: [ 'dependabot/**' ]
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 jobs:
   single-commit:
