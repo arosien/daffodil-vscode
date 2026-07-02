@@ -20,24 +20,30 @@ package org.apache.daffodil.debugger.dap
 import cats.effect.IO
 import cats.syntax.all._
 import java.nio.file.Path
-import org.apache.daffodil.sapi._
 
-trait Compiler {
-  def compile(schema: Path, tunables: Map[String, String]): IO[DataProcessor]
+trait DAPCompiler {
+  def compile(
+      schema: Path,
+      rootName: Option[String],
+      rootNamespace: Option[String],
+      tunables: Map[String, String]
+  ): IO[DataProcessor]
 }
 
-object Compiler {
-  def apply(): Compiler =
-    new Compiler {
-      def compile(schema: Path, tunables: Map[String, String]): IO[DataProcessor] =
+object DAPCompiler {
+  def apply(): DAPCompiler =
+    new DAPCompiler {
+      def compile(
+          schema: Path,
+          rootName: Option[String],
+          rootNamespace: Option[String],
+          tunables: Map[String, String]
+      ): IO[DataProcessor] =
         IO.blocking(
-          Daffodil
-            .compiler()
-            .withTunables(tunables)
-            .compileFile(schema.toFile())
-        ).ensureOr(pf => CompilationFailed(pf.getDiagnostics))(!_.isError)
+          Support.getProcessorFactory(schema, rootName, rootNamespace, tunables)
+        ).ensureOr(pf => CompilationFailed(Support.parseDiagnosticList(pf.getDiagnostics)))(!_.isError())
           .map(_.onPath("/"))
     }
 
-  case class CompilationFailed(seq: Seq[Diagnostic]) extends Exception(seq.map(_.toString).mkString(", "))
+  case class CompilationFailed(seq: Seq[SDiagnostic]) extends Exception(seq.map(_.toString).mkString(", "))
 }

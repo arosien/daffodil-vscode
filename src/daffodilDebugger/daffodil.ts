@@ -15,13 +15,25 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs'
-import { parse as jsoncParse } from 'jsonc-parser'
 import { DebugSession, DebugSessionCustomEvent, debug } from 'vscode'
+import { SchemaData } from '../classes/schemaData'
 
 export const dataEvent = 'daffodil.data'
 export interface DaffodilData {
   bytePos1b: number
+}
+
+export const dataLeftOverEvent = 'daffodil.dataLeftOver'
+export interface DaffodilDataLeftOver {
+  bitPos1b: number
+  bytePos1b: number
+  leftOverBits: number
+  message: string
+}
+
+export const parseErrorEvent = 'daffodil.parseError'
+export interface DaffodilParseError {
+  message: string
 }
 
 export const infosetEvent = 'daffodil.infoset'
@@ -39,7 +51,7 @@ export interface ConfigEvent {
 }
 
 export interface LaunchArgs {
-  schemaPath: string
+  schema: SchemaData
   dataPath: string
   stopOnEntry: boolean
   infosetFormat: string
@@ -57,10 +69,6 @@ export interface BuildInfo {
   scalaVersion: string
 }
 
-export function getDaffodilVersion(filePath: fs.PathLike) {
-  return jsoncParse(fs.readFileSync(filePath).toString())['daffodilVersion']
-}
-
 export interface IDaffodilEvent {
   readonly type: DaffodilEventType
   readonly body: DaffodilDataType
@@ -68,27 +76,40 @@ export interface IDaffodilEvent {
 
 export type DaffodilEventType =
   | 'daffodil.data'
+  | 'daffodil.dataLeftOver'
+  | 'daffodil.parseError'
   | 'daffodil.infoset'
   | 'daffodil.config'
-export type DaffodilDataType = DaffodilData | InfosetEvent | ConfigEvent
+export type DaffodilEventData = { command: string; data: any }
+export type DaffodilDataType =
+  | DaffodilData
+  | DaffodilDataLeftOver
+  | DaffodilParseError
+  | InfosetEvent
+  | ConfigEvent
 export type DaffodilDataTypeMap = {
   'daffodil.data': DaffodilData
+  'daffodil.dataLeftOver': DaffodilDataLeftOver
+  'daffodil.parseError': DaffodilParseError
   'daffodil.infoset': InfosetEvent
   'daffodil.config': ConfigEvent
 }
+
 export class DaffodilDebugEvent<
   E extends DaffodilEventType,
   B extends DaffodilDataTypeMap[E],
 > implements DebugSessionCustomEvent
 {
   readonly session: DebugSession
+
   constructor(
     readonly event: E,
     readonly body: B
   ) {
     this.session = debug.activeDebugSession!
   }
-  asEditorMessage(): { command: string; data: any } {
+
+  asObject(): DaffodilEventData {
     return {
       command: this.event,
       data: this.body,
@@ -106,8 +127,9 @@ export function extractDaffodilEvent<
   return new DaffodilDebugEvent(eventType, body)
 }
 
-export function extractDaffodilData<
-  E extends DaffodilEventType,
->(editorMessage: { command: string; data: any }): DaffodilDataTypeMap[E] {
-  return editorMessage.data as DaffodilDataTypeMap[E]
+export function extractDaffodilData<E extends DaffodilEventType>(message: {
+  command: string
+  data: any
+}): DaffodilDataTypeMap[E] {
+  return message.data as DaffodilDataTypeMap[E]
 }

@@ -26,16 +26,21 @@ object Rat {
     file(".metal"),
     // vscode-test generated directory
     file(".vscode-test"),
+    // version file does not contain a license header
+    file("VERSION"),
     /** Can't add license headers in JSON files. Adding a license attribute breaks things in some of these files as
       * well.
       */
     file("language/dfdl.json"),
+    file("language/tdml.json"),
     file("language/syntax.json"),
     file("language/syntaxes/dfdl.tmLanguage.json"),
+    file("language/syntaxes/tdml.tmLanguage.json"),
     file("package.json"),
     file("svelte/package.json"),
     file(".prettierrc"),
     file("svelte/.prettierrc"),
+    file("build/license_data.json"),
     // ignore images - daffiodil.ico
     file("images/daffodil.ico"),
     // yarn and rpm generated files
@@ -52,10 +57,37 @@ object Rat {
     file("debugger/src/test/data/notInfoset.xml"),
     file("debugger/src/test/data/emptySchema.dfdl.xsd"),
     // svelte icons/fonts
-    file("src/svelte/src/resources/icons/material-icons.woff2"),
-    file("src/svelte/src/resources/fonts/SpaceGrotesk-Variable.woff2"),
-    file("src/svelte/src/resources/fonts/RedHatMono-Regular.woff2")
-  )
+    file("src/svelte/resources/icons/material-icons.woff2"),
+    file("src/svelte/resources/fonts/SpaceGrotesk-Variable.woff2"),
+    file("src/svelte/resources/fonts/RedHatMono-Regular.woff2"),
+    // scalafmt-core files
+    file(".git-blame-ignore-revs"),
+    // DFDL schema element and attribute cross reference
+    file("src/language/dfdl-xref/DFDL_ElementXRef.md"),
+    file("src/language/dfdl-xref/DFDL_ElementAnnotationXRef.md"),
+    file("src/language/dfdl-xref/DFDL_PropertyXRef.md"),
+    file("src/language/dfdl-xref/DFDL_Schema_Definition_Errors.md"),
+    file("src/language/dfdl-xref/html/DFDL_XRef.htm"),
+    file("src/language/dfdl-xref/DFDL_Schema_Definition_Errors.md"),
+    file("src/language/dfdl-xref/html/DFDL_XRef_files/filelist.xml"),
+    file("src/language/dfdl-xref/html/DFDL_XRef_files/sheet001.htm"),
+    file("src/language/dfdl-xref/html/DFDL_XRef_files/sheet002.htm"),
+    file("src/language/dfdl-xref/html/DFDL_XRef_files/sheet003.htm"),
+    file("src/language/dfdl-xref/html/DFDL_XRef_files/stylesheet.css"),
+    file("src/language/dfdl-xref/html/DFDL_XRef_files/tabstrip.htm"),
+    file("src/language/dfdl-xref/DFDL_XRef.xlsx"),
+    // Issue templates
+    file(".github/ISSUE_TEMPLATE/bug_report.md"),
+    file(".github/ISSUE_TEMPLATE/feature_request.md"),
+    file(".github/ISSUE_TEMPLATE/enhancement_request.md"),
+    file(".github/ISSUE_TEMPLATE/task.md"),
+    file(".github/pull_request_template.md")
+  ) ++ {
+    // images
+    val dir = new File("images")
+    if (dir.exists && dir.isDirectory) dir.listFiles().toSeq
+    else Seq.empty
+  }
 
   lazy val MIT_LICENSE_NAME = "MIT License"
 

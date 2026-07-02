@@ -29,6 +29,11 @@ const defaultConf = getConfig({
   name: 'Wizard Config',
   request: 'launch',
   type: 'dfdl',
+  schema: {
+    path: '${command:AskForSchemaName}',
+    rootName: null,
+    rootNamespace: null,
+  },
 })
 
 // Function that will activate/open the launch config wizard
@@ -38,6 +43,14 @@ export async function activate(ctx: vscode.ExtensionContext) {
       launchWizard = await createWizard(ctx)
     })
   )
+}
+
+function getAllowedLogLevels(toLower: boolean = false): string[] {
+  let logLevels: string[] = []
+  ;['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].forEach((logLevel) => {
+    logLevels.push(toLower ? logLevel.toLowerCase() : logLevel)
+  })
+  return logLevels
 }
 
 // Function to get config values
@@ -50,6 +63,15 @@ function getConfigValues(data, configIndex) {
     for (var key of Object.keys(defaultConf)) {
       if (!currentConfig.hasOwnProperty(key)) {
         currentConfig[key] = defaultConf[key]
+      }
+
+      // If key is an object itself, make sure nested keys are in current config
+      if (defaultConf[key] instanceof Object) {
+        for (var nestedKey of Object.keys(defaultConf[key])) {
+          if (!currentConfig[key].hasOwnProperty(nestedKey)) {
+            currentConfig[key][nestedKey] = defaultConf[key][nestedKey]
+          }
+        }
       }
     }
 
@@ -289,9 +311,9 @@ async function createWizard(ctx: vscode.ExtensionContext) {
             let duplicateCount = 0
 
             if (message.id === 'daffodilDebugClasspath') {
-              duplicateCount = message.extraData['daffodilDebugClasspath']
-                .split(':')
-                .some((cp) => cp === result)
+              duplicateCount = message.extraData['daffodilDebugClasspath'].some(
+                (cp) => cp === result
+              )
             }
 
             var command =
@@ -339,7 +361,13 @@ class LaunchWizard {
         'launchWizard',
         'Launch Config Wizard',
         vscode.ViewColumn.Active,
-        this.getWebViewOptions(this.extensionUri)
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: [
+            vscode.Uri.parse(this.ctx.asAbsolutePath('./src/launchWizard')),
+          ],
+        }
       )
 
       this.panel.onDidDispose(
@@ -367,7 +395,7 @@ class LaunchWizard {
   // Method to set html for the data editor
   getWebViewContent(selectedConfigNumber: number | undefined = undefined) {
     const scriptUri = vscode.Uri.parse(
-      this.ctx.asAbsolutePath('./src/launchWizard/launchWizard.js')
+      this.ctx.asAbsolutePath('./src/launchWizard/script.js')
     )
     const styleUri = vscode.Uri.parse(
       this.ctx.asAbsolutePath('./src/styles/styles.css')
@@ -386,8 +414,8 @@ class LaunchWizard {
     let configIndex = selectedConfigNumber
       ? selectedConfigNumber
       : fs.existsSync(`${rootPath}/.vscode/launch.json`)
-      ? 0
-      : -1
+        ? 0
+        : -1
     let fileData = JSON.parse('{}')
 
     if (fs.existsSync(`${rootPath}/.vscode/launch.json`)) {
@@ -425,7 +453,7 @@ class LaunchWizard {
     let daffodilDebugClasspathList =
       '<ul id="daffodilDebugClasspathTable" style="list-style: none; padding-left: 20px;">'
     if (defaultValues.daffodilDebugClasspath) {
-      let itemArray = defaultValues.daffodilDebugClasspath.split(':')
+      let itemArray = defaultValues.daffodilDebugClasspath
       for (let i = 0; i < itemArray.length; i++) {
         daffodilDebugClasspathList += `
           <li style="margin-left: -5px;" onclick="removeDebugClasspathItem(this)">
@@ -467,26 +495,34 @@ class LaunchWizard {
       }
     })
 
-    let tdmlActionSelect = 'none'
-    let tdmlActions = ['none', 'generate', 'append', 'execute']
+    const TDML_EXECUTE_ACTION = 'execute'
+    const TDML_NONE_ACTION = 'none'
+    const TDML_GENERATE_ACTION = 'generate'
+
+    let tdmlActionSelect = TDML_NONE_ACTION
+    let tdmlActions = [
+      TDML_NONE_ACTION,
+      TDML_GENERATE_ACTION,
+      TDML_EXECUTE_ACTION,
+    ]
     let tdmlAction =
       'tdmlConfig' in defaultValues ? defaultValues.tdmlConfig['action'] : null
     let tdmlName =
-      'tdmlConfig' in defaultValues ? defaultValues.tdmlConfig['name'] : null
-    let tdmlDescription =
-      'tdmlConfig' in defaultValues
-        ? defaultValues.tdmlConfig['description']
-        : null
+      'tdmlConfig' in defaultValues && defaultValues.tdmlConfig['name']
+        ? defaultValues.tdmlConfig['name']
+        : ''
     let tdmlPath =
-      'tdmlConfig' in defaultValues ? defaultValues.tdmlConfig['path'] : null
+      'tdmlConfig' in defaultValues && defaultValues.tdmlConfig['path']
+        ? defaultValues.tdmlConfig['path']
+        : ''
 
     // tdml items need 0 height and width when hidden so there is no large empty space
     let tdmlNameDesVisOrHiddenStyle =
-      tdmlAction !== null
+      tdmlAction !== null && tdmlAction !== TDML_NONE_ACTION // Hide TDML name and desc fields if tdmlAction is none
         ? 'margin-top: 10px; visibility: visible;'
         : 'width: 0px; height: 0px; visibility: hidden'
     let tdmlPathVisOrHiddenStyle =
-      tdmlAction === 'generate'
+      tdmlAction === TDML_EXECUTE_ACTION
         ? 'margin-top: 10px; visibility: visible;'
         : 'width: 0px; height: 0px; visibility: hidden'
 
@@ -499,7 +535,30 @@ class LaunchWizard {
     })
 
     let dfdlDebugger: DFDLDebugger = defaultValues.dfdlDebugger
+
+    let debuggerLogLevelSelect = ''
+    let debuggerLogLevelTypes = getAllowedLogLevels()
+    let debuggerLogLevel = dfdlDebugger.logging.level
+    debuggerLogLevelTypes.forEach((type) => {
+      if (type === debuggerLogLevel) {
+        debuggerLogLevelSelect += `<option selected value="${type}">${type}</option>`
+      } else {
+        debuggerLogLevelSelect += `<option value="${type}">${type}</option>`
+      }
+    })
+
     let dataEditor: DataEditorConfig = defaultValues.dataEditor
+    let dataEditorLogLevelSelect = ''
+    let dataEditorLogLevelTypes = getAllowedLogLevels(true)
+    let dataEditorLogLevel = dataEditor.logging.level
+
+    dataEditorLogLevelTypes.forEach((type) => {
+      if (type === dataEditorLogLevel) {
+        dataEditorLogLevelSelect += `<option selected value="${type}">${type}</option>`
+      } else {
+        dataEditorLogLevelSelect += `<option value="${type}">${type}</option>`
+      }
+    })
 
     return `
   <!DOCTYPE html>
@@ -558,7 +617,7 @@ class LaunchWizard {
       <div id="schemaDiv" class="setting-div">
         <p>Main Schema File:</p>
         <p class="setting-description">Absolute path to the DFDL schema file.</p>
-        <input class="file-input" value="${defaultValues.schema}" id="schema"/>
+        <input class="file-input" value="${defaultValues.schema.path}" id="schema"/>
         <button id="schemaBrowse" class="browse-button" type="button" onclick="filePicker('schema', 'Select DFDL schema to debug')">Browse</button>
       </div>
 
@@ -569,17 +628,37 @@ class LaunchWizard {
         <button id="dataBrowse" class="browse-button" type="button" onclick="filePicker('data', 'Select input data file to debug')">Browse</button>
       </div>
 
+      <div id="rootNameDiv" class="setting-div">
+        <p>Root Element Name:</p>
+        <p class="setting-description">Name of the root element.</p>
+        <input class="file-input" value="${defaultValues.schema.rootName}" id="rootName"/>
+      </div>
+
+      <div id="rootNamespaceDiv" class="setting-div">
+        <p>Root Element Namespace:</p>
+        <p class="setting-description">Namespace of the root element.</p>
+        <input class="file-input" value="${defaultValues.schema.rootNamespace}" id="rootNamespace"/>
+      </div>
+
       <div id="dfdlDebuggerDiv" class="setting-div">
         <p>Daffodil Debugger Settings:</p>
 
         <p class="setting-description">Port debug server running on.</p>
         <input class="file-input" value="${defaultValues.debugServer}" id="debugServer"/>
 
+        <p id="dfdlDaffodilVersionLabel" style="margin-top: 10px;" class="setting-description">Version (Daffodil Version):</p>
+        <input class="file-input" value="${dfdlDebugger.daffodilVersion}" id="dfdlDaffodilVersion">
+
+        <p id="dfdlDebuggerTimeoutLabel" style="margin-top: 10px;" class="setting-description">Timeout (should end with s, m or h):</p>
+        <input class="file-input" value="${dfdlDebugger.timeout}" id="dfdlDebuggerTimeout">
+
         <p id="dfdlDebuggerLogFileLabel" style="margin-top: 10px;" class="setting-description">Log File:</p>
         <input class="file-input" value="${dfdlDebugger.logging.file}" id="dfdlDebuggerLogFile">
         
         <p id="dfdlDebuggerLogLevelLabel" style="margin-top: 10px;" class="setting-description">Log Level:</p>
-        <input class="file-input" value="${dfdlDebugger.logging.level}" id="dfdlDebuggerLogLevel">
+        <select class="file-input" style="width: 200px;" id="dfdlDebuggerLogLevel">
+          ${debuggerLogLevelSelect}
+        </select>
       </div>
 
       <div id="useExistingServerDiv" class="setting-div" onclick="check('useExistingServer')">
@@ -648,7 +727,7 @@ class LaunchWizard {
 
       <div id="openInfosetDiffViewDiv" class="setting-div" onclick="check('openInfosetDiffView')">
         <p>Open Infoset Diff View:</p>
-        <label class="container">Open infoset view on debug start.
+        <label class="container">Open infoset diff on debug start.
           <input type="checkbox" id="openInfosetDiffView" ${openInfosetDiffView}>
           <span class="checkmark"></span>
         </label>
@@ -656,7 +735,7 @@ class LaunchWizard {
 
       <div id="openInfosetViewDiv" class="setting-div" onclick="check('openInfosetView')">
         <p>Open Infoset View:</p>
-        <label class="container">Open infoset diff on debug start.
+        <label class="container">Open infoset view on debug start.
           <input type="checkbox" id="openInfosetView" ${openInfosetView}>
           <span class="checkmark"></span>
         </label>
@@ -664,7 +743,7 @@ class LaunchWizard {
 
       <div id="tdmlActionDiv" class="setting-div">
         <p>TDML Action:</p>
-        <p class="setting-description">TDML Action (none | generate | append | execute)</p>
+        <p class="setting-description">TDML Action (${TDML_NONE_ACTION} | ${TDML_GENERATE_ACTION} | ${TDML_EXECUTE_ACTION})</p>
         <select onChange="updateTDMLAction()" class="file-input" style="width: 200px;" id="tdmlAction">
           ${tdmlActionSelect}
         </select>
@@ -672,13 +751,53 @@ class LaunchWizard {
         <p id="tdmlNameLabel" style="${tdmlNameDesVisOrHiddenStyle}" class="setting-description">TDML Name:</p>
         <input style="${tdmlNameDesVisOrHiddenStyle}" class="file-input" value="${tdmlName}" id="tdmlName">
 
-        <p id="tdmlDescriptionLabel" style="${tdmlNameDesVisOrHiddenStyle}" class="setting-description">TDML Description:</p>
-        <input style="${tdmlNameDesVisOrHiddenStyle}" class="file-input" value="${tdmlDescription}" id="tdmlDescription">
-
         <p id="tdmlPathLabel" style="${tdmlPathVisOrHiddenStyle}" class="setting-description">TDML File Path:</p>
         <input style="${tdmlPathVisOrHiddenStyle}" class="file-input" value="${tdmlPath}" id="tdmlPath">
       </div>
+      
+      <div id="tunablesDiv" class="setting-div" style="margin-top: 15px;">
+        <p>Tunables:</p>
+        <p class="setting-description">Key/value configuration options</p>
 
+        <table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+          <thead>
+            <tr>
+              <th style="text-align: left;">Key</th>
+              <th style="text-align: left;">Value</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tunablesTableBody">
+            <!-- rows later -->
+          </tbody>
+        </table>
+
+        <button id="addTunableBtn" onclick="addTunableRow()" style="margin-top: 10px;">
+          + Add Tunable
+        </button>
+      </div>
+
+      <div id="VariablesDiv" class="setting-div" style="margin-top: 15px;">
+        <p>Variables:</p>
+        <p class="setting-description">Key/value configuration options</p>
+
+        <table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+          <thead>
+            <tr>
+              <th style="text-align: left;">Key</th>
+              <th style="text-align: left;">Value</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="variablesTableBody">
+            <!-- rows later -->
+          </tbody>
+        </table>
+
+        <button id="addVariableBtn" onclick="addVariableRow()" style="margin-top: 10px;">
+          + Add Variable
+        </button>
+      </div>
       <div id="dataEditorDiv" class="setting-div">
         <p>Data Editor Settings:</p>
         
@@ -689,9 +808,10 @@ class LaunchWizard {
         <input class="file-input" value="${dataEditor.logging.file}" id="dataEditorLogFile">
         
         <p id="dataEditorLogLevelLabel" style="margin-top: 10px;" class="setting-description">Log Level:</p>
-        <input class="file-input" value="${dataEditor.logging.level}" id="dataEditorLogLevel">
+        <select class="file-input" style="width: 200px;" id="dataEditorLogLevel">
+          ${dataEditorLogLevelSelect}
+        </select>
       </div>
-
       <br/>
       <button class="save-button" type="button" onclick="save()">Save</button>
     </body>

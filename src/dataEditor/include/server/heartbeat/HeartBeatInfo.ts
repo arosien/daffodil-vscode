@@ -14,23 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { IServerHeartbeat, IServerInfo } from '@omega-edit/client'
-import { ServerInfo } from '../ServerInfo'
+import { IServerHeartbeat } from '@omega-edit/client'
 
-export interface IHeartbeatInfo extends IServerHeartbeat {
-  omegaEditPort: number // Ωedit server port
-  serverInfo: IServerInfo // server info that remains constant
-}
-export class HeartbeatInfo {
-  omegaEditPort: number = 0 // Ωedit server port
+export class HeartbeatInfo implements IServerHeartbeat {
   latency: number = 0 // latency in ms
-  serverCommittedMemory: number = 0 // committed memory in bytes
   serverCpuCount: number = 0 // cpu count
-  serverCpuLoadAverage: number = 0 // cpu load average
-  serverMaxMemory: number = 0 // max memory in bytes
+  serverCpuLoadAverage?: number = 0 // cpu load average
+  serverPeakResidentMemoryBytes?: number = 0 // peak resident memory in bytes
+  serverResidentMemoryBytes?: number = 0 // resident memory in bytes
   serverTimestamp: number = 0 // timestamp in ms
   serverUptime: number = 0 // uptime in ms
-  serverUsedMemory: number = 0 // used memory in bytes
+  serverVirtualMemoryBytes?: number = 0 // virtual memory in bytes
   sessionCount: number = 0 // session count
-  serverInfo: IServerInfo = new ServerInfo()
 }

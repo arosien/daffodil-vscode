@@ -33,6 +33,7 @@ limitations under the License.
     dataDislayLineAmount,
     replaceQuery,
     searchResultsUpdated,
+    dfdlBytePos,
   } from '../../../stores'
   import {
     EditByteModes,
@@ -66,8 +67,17 @@ limitations under the License.
   import {
     viewportByteIndicators,
     categoryCSSSelectors,
-      } from '../../../utilities/highlights'
+  } from '../../../utilities/highlights'
   import { bytesPerRow } from '../../../stores'
+
+  /* DEBUG_ONLY_START */
+  import { addVarToDebug, getDebugVarContext } from '../../Debug'
+  const debugVarsCtx = getDebugVarContext()
+  debugVarsCtx.add(
+    { id: 'bytes / row', valueStr: () => $bytesPerRow.toString() },
+    { id: 'feed line top', valueStr: () => $dataFeedLineTop.toString() }
+  )
+  /* DEBUG_ONLY_END */
   export let awaitViewportSeek: boolean
   export let dataRadix: RadixValues = 16
   export let addressRadix: RadixValues = 16
@@ -169,11 +179,16 @@ limitations under the License.
     bytes: Array<ByteValue>
     highlight: 'even' | 'odd'
   }
-  
-  enum ViewportScrollDirection {
-    DECREMENT = -1,
-    NONE = 0,
-    INCREMENT = 1,
+
+  // enum ViewportScrollDirection {
+  //   DECREMENT = -1,
+  //   NONE = 0,
+  //   INCREMENT = 1,
+  // }
+  class ViewportScrollDirection {
+    public static readonly DECREMENT = -1
+    public static readonly NONE = 0
+    public static readonly INCREMENT = 1
   }
 
   let height = `calc(${$dataDislayLineAmount} * 20)px`
@@ -186,7 +201,8 @@ limitations under the License.
 
   $: {
     makingSelection =
-      $selectionDataStore.startOffset >= 0 && $selectionDataStore.active === false
+      $selectionDataStore.startOffset >= 0 &&
+      $selectionDataStore.active === false
   }
   onMount(() => {
     viewportDataContainer = document.getElementById(
@@ -244,9 +260,18 @@ limitations under the License.
   }
   $: byteElementWidth = byteDivWidthFromRadix(dataRadix)
   $: viewportByteIndicators.updateSelectionIndications($selectionDataStore)
-  $: viewportByteIndicators.updateSearchIndications($searchQuery, viewportData.fileOffset)
-  $: viewportByteIndicators.updateReplaceIndications($replaceQuery, viewportData.fileOffset)
-  
+  $: viewportByteIndicators.updateSearchIndications(
+    $searchQuery,
+    viewportData.fileOffset
+  )
+  $: viewportByteIndicators.updateReplaceIndications(
+    $replaceQuery,
+    viewportData.fileOffset
+  )
+  $: viewportByteIndicators.updateDebuggerPosIndication(
+    $dfdlBytePos,
+    viewportData.fileOffset
+  )
 
   function generate_line_data(
     startIndex: number,
@@ -304,7 +329,7 @@ limitations under the License.
 
     scrollDebounce = setTimeout(() => {
       scrollDebounce = null
-      const direction: ViewportScrollDirection = Math.sign(event.deltaY)
+      const direction: number = Math.sign(event.deltaY)
 
       handle_navigation(direction)
     }, DEBOUNCE_TIMEOUT_MS)
@@ -316,10 +341,12 @@ limitations under the License.
       : atViewportTail && atFileTail
   }
 
-  function direction_of_scroll(
-    numLinesToScroll: number
-  ): ViewportScrollDirection {
-    return Math.sign(numLinesToScroll) as ViewportScrollDirection
+  function direction_of_scroll(numLinesToScroll: number): number {
+    if (Math.sign(numLinesToScroll) > 0)
+      return ViewportScrollDirection.INCREMENT
+    if (Math.sign(numLinesToScroll) < 0)
+      return ViewportScrollDirection.DECREMENT
+    return ViewportScrollDirection.NONE
   }
 
   function handle_navigation(numLinesToScroll: number) {
@@ -350,7 +377,7 @@ limitations under the License.
   }
 
   function at_fetch_boundary(
-    direction: ViewportScrollDirection,
+    direction: number,
     linesToMove: number = direction
   ): boolean {
     if (linesToMove != direction)
@@ -395,7 +422,7 @@ limitations under the License.
     const end = $selectionDataStore.endOffset
 
     if (start > end) {
-      selectionDataStore.update( selections => {
+      selectionDataStore.update((selections) => {
         selections.startOffset = end
         selections.endOffset = start
         return selections
@@ -430,7 +457,7 @@ limitations under the License.
       command: MessageCommand.editorOnChange,
       data: {
         fileOffset: $selectionDataStore.startOffset + viewportData.fileOffset,
-        selectionData: $editedDataSegment,
+        selectionData: Array.from($editedDataSegment),
         encoding: forcedEncoding ? forcedEncoding : $editorEncoding,
         selectionSize: $selectionSize,
         editMode: $editMode,
@@ -478,11 +505,11 @@ limitations under the License.
   }
 
   function mouseover_handler(e: Event) {
-    if(!makingSelection) return 
+    if (!makingSelection) return
 
     const target = e.target as HTMLDivElement
     let targetViewportIndex = parseInt(target.getAttribute('offset')!)
-    
+
     selectionDataStore.update((selections) => {
       selections.endOffset = targetViewportIndex
       adjust_event_offsets()
@@ -500,22 +527,38 @@ limitations under the License.
     let targetByte: ByteValue = {
       offset: targetViewportIndex,
       text: byteText,
-      value: byteValue
+      value: byteValue,
     }
-    const byteSelectionEvent: ByteSelectionEvent = 
-      {
-        targetElement: targetElement,
-        targetByte: targetByte,
-        fromViewport: targetElement.id.includes('logical') ? 'logical' : 'physical',
-      } 
+    const byteSelectionEvent: ByteSelectionEvent = {
+      targetElement: targetElement,
+      targetByte: targetByte,
+      fromViewport: targetElement.id.includes('logical')
+        ? 'logical'
+        : 'physical',
+    }
 
-    switch(type) {
+    switch (type) {
       case 'mousedown':
         mousedown(byteSelectionEvent)
         break
       case 'mouseup':
         mouseup(byteSelectionEvent)
     }
+  }
+
+  function offsetDisplayRange() {
+    return {
+      first: viewportLines[0].bytes[0].offset,
+      last: viewportLines[$dataDislayLineAmount - 1].bytes[$bytesPerRow - 1]
+        .offset,
+    }
+  }
+  function bytePosIsDisplayable(bytepos: number): boolean {
+    const { first, last } = offsetDisplayRange()
+    return (
+      bytepos >= first + viewportData.fileOffset &&
+      bytepos < last + viewportData.fileOffset
+    )
   }
 
   window.addEventListener('keydown', navigation_keydown_event)
@@ -536,18 +579,23 @@ limitations under the License.
         break
       case 'daffodil.data':
         const { bytePos1b } = msg.data.data
-        viewportByteIndicators.updateDebuggerPosIndication( bytePos1b - 1 )
+        if (!bytePosIsDisplayable(bytePos1b - 1)) {
+          $seekOffsetInput = bytePos1b.toString(addressRadix)
+          eventDispatcher('seek')
+        }
+        $dfdlBytePos = bytePos1b - 1
         break
     }
   })
-
 </script>
 
-
-<svelte:window on:mousemove={mouseover_handler}/>
+<svelte:window on:mousemove={mouseover_handler} />
 <!-- svelte-ignore a11y-mouse-events-have-key-events -->
 <!-- svelte-ignore a11y-click-events-have-key-events -->
-<div class="container" style:height id={CONTAINER_ID} 
+<div
+  class="container"
+  style:height
+  id={CONTAINER_ID}
   on:mousedown={mouseclick_handler}
   on:mouseup={mouseclick_handler}
 >
@@ -568,36 +616,40 @@ limitations under the License.
       </div>
 
       {#if $visableViewports === 'physical' || $visableViewports === 'all'}
-      <div
-        class="byte-line"
-        id="physical-line-{i.toString(16).padStart(2, '0')}"
-      >
-        {#each viewportLine.bytes as byte}
-          <DataValue
-            {byte}
-            id={'physical'}
-            categoryIndicationSelectors={categoryCSSSelectors($viewportByteIndicators[byte.offset])}
-            width={byteElementWidth}
-            disabled={byte.value === -1}
-          />
-        {/each}
-      </div>
+        <div
+          class="byte-line"
+          id="physical-line-{i.toString(16).padStart(2, '0')}"
+        >
+          {#each viewportLine.bytes as byte}
+            <DataValue
+              {byte}
+              id={'physical'}
+              categoryIndicationSelectors={categoryCSSSelectors(
+                $viewportByteIndicators[byte.offset]
+              )}
+              width={byteElementWidth}
+              disabled={byte.value === -1}
+            />
+          {/each}
+        </div>
       {/if}
       {#if $visableViewports === 'logical' || $visableViewports === 'all'}
-      <div
-        class="byte-line"
-        id="logical-line-{i.toString(16).padStart(2, '0')}"
-      >
-        {#each viewportLine.bytes as byte}
-          <DataValue
-            {byte}
-            categoryIndicationSelectors={categoryCSSSelectors($viewportByteIndicators[byte.offset])}
-            id={'logical'}
-            width={byteElementWidth}
-            disabled={byte.value === -1}
-          />
-        {/each}
-      </div>
+        <div
+          class="byte-line"
+          id="logical-line-{i.toString(16).padStart(2, '0')}"
+        >
+          {#each viewportLine.bytes as byte}
+            <DataValue
+              {byte}
+              categoryIndicationSelectors={categoryCSSSelectors(
+                $viewportByteIndicators[byte.offset]
+              )}
+              id={'logical'}
+              width={byteElementWidth}
+              disabled={byte.value === -1}
+            />
+          {/each}
+        </div>
       {/if}
     </div>
   {/each}
@@ -683,17 +735,19 @@ limitations under the License.
       </Button>
       <span class="separator" />
       <Button
-        fn={() => { 
-            $dataDislayLineAmount += 1
-            viewportLines = generate_line_data(
-              $dataFeedLineTop,
-              dataRadix,
-              addressRadix
-              )
-          }
-        }
-        disabledBy={ (($dataDislayLineAmount+1)*$bytesPerRow >= VIEWPORT_SCROLL_INCREMENT) }
-        description={"Increment display lines (" + ($dataDislayLineAmount+1) + ")"}
+        fn={() => {
+          $dataDislayLineAmount += 1
+          viewportLines = generate_line_data(
+            $dataFeedLineTop,
+            dataRadix,
+            addressRadix
+          )
+        }}
+        disabledBy={($dataDislayLineAmount + 1) * $bytesPerRow >=
+          VIEWPORT_SCROLL_INCREMENT}
+        description={'Increment display lines (' +
+          ($dataDislayLineAmount + 1) +
+          ')'}
         tooltipAlwaysEnabled={true}
         width="30pt"
       >
@@ -702,17 +756,18 @@ limitations under the License.
         </span>
       </Button>
       <Button
-        fn={() => { 
-            $dataDislayLineAmount -= 1
-            viewportLines = generate_line_data(
-              $dataFeedLineTop,
-              dataRadix,
-              addressRadix
-              )
-          }
-        }
+        fn={() => {
+          $dataDislayLineAmount -= 1
+          viewportLines = generate_line_data(
+            $dataFeedLineTop,
+            dataRadix,
+            addressRadix
+          )
+        }}
         disabledBy={$dataDislayLineAmount === 1}
-        description={"Decrement display lines (" + ($dataDislayLineAmount-1) + ")"}
+        description={'Decrement display lines (' +
+          ($dataDislayLineAmount - 1) +
+          ')'}
         tooltipAlwaysEnabled={true}
         width="30pt"
       >

@@ -124,7 +124,7 @@ limitations under the License.
 <SidePanel
   position="top-left"
   title="Data Profiler"
-  panelWidth="270px"
+  panelWidth="285px"
   bind:open={isProfilerOpen}
 >
   {#if isProfilerOpen}
@@ -163,7 +163,9 @@ limitations under the License.
   <hr />
   <FlexContainer --dir="row">
     <FlexContainer --dir="column">
-      <label for="disk_file_size">Disk Size</label>
+      <Tooltip description="Initial file size" alwaysEnabled={true}>
+        <label for="disk_file_size">Disk Size</label>
+      </Tooltip>
       <Tooltip
         description="{$fileMetrics.diskSize.toLocaleString('en')} bytes"
         alwaysEnabled={true}
@@ -174,7 +176,9 @@ limitations under the License.
       </Tooltip>
     </FlexContainer>
     <FlexContainer --dir="column">
-      <label for="computed_file_size">Computed Size</label>
+      <Tooltip description="Size as file is being edited" alwaysEnabled={true}>
+        <label for="computed_file_size">Computed Size</label>
+      </Tooltip>
       <Tooltip
         description="{$fileMetrics.computedSize.toLocaleString('en')} bytes"
         alwaysEnabled={true}
@@ -186,18 +190,19 @@ limitations under the License.
     </FlexContainer>
     <FlexContainer --dir="column">
       <label for="content_type">Content Type</label>
-      <Tooltip
-        description="{$fileMetrics.type}"
-        alwaysEnabled={true}>
-      <span id="content_type" class="nowrap">{$fileMetrics.type.split('/').pop()}</span>
-        </Tooltip>
+      <Tooltip description={$fileMetrics.type} alwaysEnabled={true}>
+        <span id="content_type" class="nowrap"
+          >{$fileMetrics.type.split('/').pop()}</span
+        >
+      </Tooltip>
     </FlexContainer>
     <FlexContainer --dir="column">
       <label for="language">Language</label>
       <Tooltip
-        description="{ISO6391.getName($fileMetrics.language)}"
-        alwaysEnabled={true}>
-      <span id="language" class="nowrap">{$fileMetrics.language}</span>
+        description={ISO6391.getName($fileMetrics.language)}
+        alwaysEnabled={true}
+      >
+        <span id="language" class="nowrap">{$fileMetrics.language}</span>
       </Tooltip>
     </FlexContainer>
   </FlexContainer>

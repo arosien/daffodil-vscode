@@ -15,14 +15,45 @@
  * limitations under the License.
  */
 
+import * as editor_config from '../../config'
+import * as fs from 'fs'
+import assert from 'assert'
 import { IServerInfo } from '@omega-edit/client'
 
 export class ServerInfo implements IServerInfo {
   serverHostname: string = 'unknown'
   serverProcessId: number = 0
   serverVersion: string = 'unknown'
-  jvmVersion: string = 'unknown'
-  jvmVendor: string = 'unknown'
-  jvmPath: string = 'unknown'
+  runtimeKind: string = 'unknown'
+  runtimeName: string = 'unknown'
+  platform: string = 'unknown'
   availableProcessors: number = 0
+  compiler: string = 'unknown'
+  buildType: string = 'unknown'
+  cppStandard: string = 'unknown'
 }
+
+const OMEGA_EDIT_MAX_PORT: number = 65535
+const OMEGA_EDIT_MIN_PORT: number = 1024
+
+export function configureOmegaEditPort(configVars: editor_config.Config): void {
+  const omegaEditPort = configVars.port
+  if (
+    omegaEditPort <= OMEGA_EDIT_MIN_PORT ||
+    omegaEditPort > OMEGA_EDIT_MAX_PORT
+  ) {
+    throw new Error(
+      `Invalid port ${omegaEditPort} for Ωedit. Use a port between ${OMEGA_EDIT_MIN_PORT} and ${OMEGA_EDIT_MAX_PORT}`
+    )
+  }
+
+  if (!fs.existsSync(configVars.checkpointPath)) {
+    fs.mkdirSync(configVars.checkpointPath, { recursive: true })
+  }
+  assert(
+    fs.existsSync(configVars.checkpointPath),
+    'checkpoint path does not exist'
+  )
+}
+
+export type ServerStopPredicate = (context?: any) => boolean

@@ -62,7 +62,6 @@ limitations under the License.
   } from './DataDisplays/CustomByteDisplay/BinaryData'
   import { byte_count_divisible_offset } from '../utilities/display'
   import Help from './layouts/Help.svelte'
-  import { viewportByteIndicators } from '../utilities/highlights'
 
   $: $UIThemeCSSClass = $darkUITheme ? CSSThemeClass.Dark : CSSThemeClass.Light
 
@@ -95,8 +94,12 @@ limitations under the License.
     const nearestBPRdivisibleViewportFileOffset = byte_count_divisible_offset(
       viewportStartOffset,
       bytesPerRow
-    ) 
-    return (nearestBPRdivisibleTargetFileOffset - nearestBPRdivisibleViewportFileOffset) / bytesPerRow
+    )
+    return (
+      (nearestBPRdivisibleTargetFileOffset -
+        nearestBPRdivisibleViewportFileOffset) /
+      bytesPerRow
+    )
   }
 
   function fetchable_content(offset: number): boolean {
@@ -131,7 +134,13 @@ limitations under the License.
 
     $dataFeedAwaitRefresh = true
 
-    const fetchOffset = Math.max(0, byte_count_divisible_offset(offsetArg - (VIEWPORT_SCROLL_INCREMENT-$bytesPerRow), $bytesPerRow))
+    const fetchOffset = Math.max(
+      0,
+      byte_count_divisible_offset(
+        offsetArg - (VIEWPORT_SCROLL_INCREMENT - $bytesPerRow),
+        $bytesPerRow
+      )
+    )
 
     $dataFeedLineTop = offset_to_viewport_line_number(
       offsetArg,
@@ -214,8 +223,8 @@ limitations under the License.
       command: MessageCommand.applyChanges,
       data: {
         offset: editedOffset,
-        originalSegment: originalData,
-        editedSegment: editedData,
+        originalSegment: Array.from(originalData),
+        editedSegment: Array.from(editedData),
       },
     })
     clearDataDisplays()
@@ -253,7 +262,8 @@ limitations under the License.
   function handleKeyBind(event: Event) {
     const kbdEvent = event as KeyboardEvent
     if (key_is_mappable(kbdEvent.key)) {
-      if(document.activeElement) // document.activeElement is possibly undefined / null
+      if (document.activeElement)
+        // document.activeElement is possibly undefined / null
         elementKeypressEventMap.run(document.activeElement.id, kbdEvent)
       return
     }
@@ -273,10 +283,13 @@ limitations under the License.
 
       case MessageCommand.requestEditedData:
         $editorSelection = msg.data.data.dataDisplay
+        const editedBytes = Array.isArray(msg.data.data.data)
+          ? msg.data.data.data
+          : [msg.data.data.data]
         if ($editMode === EditByteModes.Multiple) {
-          $editedDataSegment = new Uint8Array(msg.data.data.data)
+          $editedDataSegment = new Uint8Array(editedBytes)
         } else {
-          $editedDataSegment[0] = msg.data.data.data
+          $editedDataSegment = new Uint8Array([editedBytes[0] ?? 0])
         }
         $selectionDataStore.endOffset =
           $selectionDataStore.startOffset + $editedDataSegment.byteLength - 1
@@ -288,10 +301,10 @@ limitations under the License.
       case MessageCommand.viewportRefresh:
         // the viewport has been refreshed, so the editor views need to be updated
         $viewport = {
-          data: msg.data.data.viewportData,
-          fileOffset: msg.data.data.viewportOffset,
-          length: msg.data.data.viewportLength,
-          bytesLeft: msg.data.data.viewportFollowingByteCount,
+          data: new Uint8Array(msg.data.data.data ?? []),
+          fileOffset: msg.data.data.fileOffset,
+          length: msg.data.data.length,
+          bytesLeft: msg.data.data.bytesLeft,
         } as ViewportData_t
 
         break
@@ -324,7 +337,6 @@ limitations under the License.
 
 <!-- svelte-ignore css-unused-selector -->
 <style lang="scss">
-
   div.test {
     display: flex;
     flex-wrap: wrap;

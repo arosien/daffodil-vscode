@@ -16,17 +16,18 @@ limitations under the License.
 -->
 <script lang="ts">
   import Button from '../Inputs/Buttons/Button.svelte'
-  import {vscode} from '../../utilities/vscode'
-  import {MessageCommand} from '../../utilities/message'
-  import {onMount} from 'svelte'
+  import { vscode } from '../../utilities/vscode'
+  import { MessageCommand } from '../../utilities/message'
+  import { onMount } from 'svelte'
   import Input from '../Inputs/Input/Input.svelte'
-  import {addressRadix, viewport} from '../../stores'
-  import {DATA_PROFILE_MAX_LENGTH} from '../../stores/configuration'
-  import {radixToString, regexEditDataTest} from '../../utilities/display'
-  import ISO6391 from "iso-639-1";
-  import Tooltip from "src/components/layouts/Tooltip.svelte";
+  import { addressRadix, fileMetrics, viewport } from '../../stores'
+  import { DATA_PROFILE_MAX_LENGTH } from '../../stores/configuration'
+  import { radixToString, regexEditDataTest } from '../../utilities/display'
+  import ISO6391 from 'iso-639-1'
+  import Tooltip from '../layouts/Tooltip.svelte'
 
   const PROFILE_DOS_EOL = 256
+  const MAX_BYTE_VALUE = 255
 
   // title for the byte profile graph
   export let title: string
@@ -135,7 +136,10 @@ limitations under the License.
   function handleCsvProfileDownload(): void {
     const csvContent =
       'Byte,Frequency\n' +
-      byteProfile.map((val, idx) => `${idx},${val}`).join('\n')
+      byteProfile
+        .filter((_, idx) => idx <= MAX_BYTE_VALUE)
+        .map((val, idx) => `${idx},${val}`)
+        .join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
@@ -146,10 +150,10 @@ limitations under the License.
   function saveSegmentAs() {
     vscode.postMessage({
       command: MessageCommand.saveSegment,
-        data: {
-            offset: startOffset,
-            length: length,
-        },
+      data: {
+        offset: startOffset,
+        length: length,
+      },
     })
   }
 
@@ -158,11 +162,21 @@ limitations under the License.
       `Profiling bytes from ${startOffset} to ${startOffset + length}...`,
       0
     )
+    length = length === $fileMetrics.diskSize ? Math.max(0, length - 1) : length
+
+    if (length < 0) {
+      vscode.postMessage({
+        command: MessageCommand.showMessage,
+        data: `Invalid data length ${length}. Cannot profile data.`,
+      })
+      return
+    }
+
     vscode.postMessage({
       command: MessageCommand.profile,
       data: {
         startOffset: startOffset,
-        length: length,
+        length: length <= 0 ? DATA_PROFILE_MAX_LENGTH : length,
       },
     })
   }
@@ -285,13 +299,20 @@ limitations under the License.
           contentType = msg.data.data.contentType as string
 
           // character count data
-          characterCountData.byteOrderMark = msg.data.data.characterCount.byteOrderMark as string
-          characterCountData.byteOrderMarkBytes = msg.data.data.characterCount.byteOrderMarkBytes as number
-          characterCountData.singleByteCount = msg.data.data.characterCount.singleByteCount as number
-          characterCountData.doubleByteCount = msg.data.data.characterCount.doubleByteCount as number
-          characterCountData.tripleByteCount = msg.data.data.characterCount.tripleByteCount as number
-          characterCountData.quadByteCount = msg.data.data.characterCount.quadByteCount as number
-          characterCountData.invalidBytes = msg.data.data.characterCount.invalidBytes as number
+          characterCountData.byteOrderMark = msg.data.data.characterCount
+            .byteOrderMark as string
+          characterCountData.byteOrderMarkBytes = msg.data.data.characterCount
+            .byteOrderMarkBytes as number
+          characterCountData.singleByteCount = msg.data.data.characterCount
+            .singleByteCount as number
+          characterCountData.doubleByteCount = msg.data.data.characterCount
+            .doubleByteCount as number
+          characterCountData.tripleByteCount = msg.data.data.characterCount
+            .tripleByteCount as number
+          characterCountData.quadByteCount = msg.data.data.characterCount
+            .quadByteCount as number
+          characterCountData.invalidBytes = msg.data.data.characterCount
+            .invalidBytes as number
 
           setStatusMessage(
             `Profiled bytes from ${startOffset} to ${startOffset + length}`
@@ -479,13 +500,15 @@ limitations under the License.
         )})</span
       ></label
     >
-    <label for="language">&nbsp;&nbsp;&nbsp;&nbsp;Language:<Tooltip
-            description="{ISO6391.getName(language)}"
-            alwaysEnabled={true}><span id="language" class="nowrap"
-        >{language}</span></Tooltip></label>
+    <label for="language"
+      >&nbsp;&nbsp;&nbsp;&nbsp;Language:<Tooltip
+        description={ISO6391.getName(language)}
+        alwaysEnabled={true}
+        ><span id="language" class="nowrap">{language}</span></Tooltip
+      ></label
+    >
     <label for="content-type"
-      >Content Type: <span id="content-type" class="nowrap"
-        >{contentType}</span
+      >Content Type: <span id="content-type" class="nowrap">{contentType}</span
       ></label
     >
     <label for="min-frequency"
@@ -518,13 +541,15 @@ limitations under the License.
       ></label
     >
     <label for="distinct-count"
-      >&nbsp;&nbsp;&nbsp;&nbsp;Distinct: <span id="distinct-count" class="nowrap"
-        >{numDistinct}</span
+      >&nbsp;&nbsp;&nbsp;&nbsp;Distinct: <span
+        id="distinct-count"
+        class="nowrap">{numDistinct}</span
       ></label
     >
     <label for="dos_eol-count"
-      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;DOS EOL: <span id="dos_eol-count" class="nowrap"
-        >{byteProfile[PROFILE_DOS_EOL]}</span
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;DOS EOL: <span
+        id="dos_eol-count"
+        class="nowrap">{byteProfile[PROFILE_DOS_EOL]}</span
       ></label
     >
     <label for="ascii-count"
@@ -532,25 +557,64 @@ limitations under the License.
       ></label
     >
     <label for="ascii-percent"
-      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;% ASCII: <span id="ascii-percent" class="nowrap"
-        >{((numAscii / sum) * 100).toFixed(2)}</span
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;% ASCII: <span
+        id="ascii-percent"
+        class="nowrap">{((numAscii / sum) * 100).toFixed(2)}</span
       >
     </label>
-    </div>
-    <hr />
-  <div class="char-count">
-    <label for="char-count-bom">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;BOM: <span id="char-count-bom" class="nowrap">{characterCountData.byteOrderMark}</span></label>
-    <label for="char-count-bom-bytes">&nbsp;&nbsp;BOM Bytes: <span id="char-count-bom-bytes" class="nowrap">{characterCountData.byteOrderMarkBytes}</span></label>
-    <label for="char-count-single">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Single: <span id="char-count-single" class="nowrap">{characterCountData.singleByteCount}</span></label>
-    <label for="char-count-double">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Double: <span id="char-count-double" class="nowrap">{characterCountData.doubleByteCount}</span></label>
-    <label for="char-count-triple">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Triple: <span id="char-count-triple" class="nowrap">{characterCountData.tripleByteCount}</span></label>
-    <label for="char-count-quad">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Quad: <span id="char-count-quad" class="nowrap">{characterCountData.quadByteCount}</span></label>
-    <label for="char-count-invalid">&nbsp;&nbsp;&nbsp;&nbsp;Invalid: <span id="char-count-invalid" class="nowrap">{characterCountData.invalidBytes}</span></label>
   </div>
   <hr />
-  <Button fn={handleCsvProfileDownload} description="Download profiled data as .csv">
+  <div class="char-count">
+    <label for="char-count-bom"
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;BOM: <span
+        id="char-count-bom"
+        class="nowrap">{characterCountData.byteOrderMark}</span
+      ></label
+    >
+    <label for="char-count-bom-bytes"
+      >&nbsp;&nbsp;BOM Bytes: <span id="char-count-bom-bytes" class="nowrap"
+        >{characterCountData.byteOrderMarkBytes}</span
+      ></label
+    >
+    <label for="char-count-single"
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Single: <span
+        id="char-count-single"
+        class="nowrap">{characterCountData.singleByteCount}</span
+      ></label
+    >
+    <label for="char-count-double"
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Double: <span
+        id="char-count-double"
+        class="nowrap">{characterCountData.doubleByteCount}</span
+      ></label
+    >
+    <label for="char-count-triple"
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Triple: <span
+        id="char-count-triple"
+        class="nowrap">{characterCountData.tripleByteCount}</span
+      ></label
+    >
+    <label for="char-count-quad"
+      >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Quad: <span
+        id="char-count-quad"
+        class="nowrap">{characterCountData.quadByteCount}</span
+      ></label
+    >
+    <label for="char-count-invalid"
+      >&nbsp;&nbsp;&nbsp;&nbsp;Invalid: <span
+        id="char-count-invalid"
+        class="nowrap">{characterCountData.invalidBytes}</span
+      ></label
+    >
+  </div>
+  <hr />
+  <Button
+    fn={handleCsvProfileDownload}
+    description="Download profiled data as .csv"
+  >
     <span slot="left" class="btn-icon material-symbols-outlined">download</span>
-    <span>Profile&nbsp;as&nbsp;CSV</span></Button>
+    <span>Profile&nbsp;as&nbsp;CSV</span></Button
+  >
   <Button fn={saveSegmentAs} description="Save segment as">
     <span slot="left" class="btn-icon material-symbols-outlined">save_as</span>
     <span slot="default">Save&nbsp;Segment&nbsp;As</span>

@@ -22,10 +22,13 @@ import * as child_process from 'child_process'
 import path from 'path'
 import { VSCodeLaunchConfigArgs } from './classes/vscode-launch'
 import { InfosetOutput } from './daffodilDebugger'
-
+import { XMLParser } from 'fast-xml-parser'
+import * as unzip from 'unzip-stream'
+import { pipeline } from 'stream/promises'
+import { Transform } from 'stream'
 let currentConfig: vscode.DebugConfiguration
 
-const terminalName = 'daffodil-debugger'
+export const terminalName = 'daffodil-debugger'
 
 export const regexp = {
   comma: new RegExp(',', 'g'),
@@ -113,6 +116,37 @@ function checkInfosetFileExtension(
   }
 }
 
+function checkSettingValue<T>(target: unknown, defaults: T): T {
+  if (
+    typeof defaults !== 'object' ||
+    defaults === null ||
+    Array.isArray(defaults)
+  ) {
+    return target === undefined ? defaults : (target as T)
+  }
+
+  if (typeof target !== 'object' || target === null) {
+    return defaults
+  }
+
+  const result: Record<string, any> = {}
+
+  for (const key of Object.keys(defaults)) {
+    result[key] = checkSettingValue(
+      (target as any)[key],
+      (defaults as any)[key]
+    )
+  }
+
+  for (const key of Object.keys(target as any)) {
+    if (!(key in result)) {
+      result[key] = (target as any)[key]
+    }
+  }
+
+  return result as T
+}
+
 export function getConfig(jsonArgs: object): vscode.DebugConfiguration {
   const launchConfigArgs: VSCodeLaunchConfigArgs = JSON.parse(
     JSON.stringify(jsonArgs)
@@ -121,7 +155,11 @@ export function getConfig(jsonArgs: object): vscode.DebugConfiguration {
   const defaultConf = vscode.workspace.getConfiguration()
 
   const defaultValues = {
-    schema: defaultConf.get('schema', '${command:AskForSchemaName}'),
+    schema: defaultConf.get('schema', {
+      path: '${command:AskForSchemaName}',
+      rootName: null,
+      rootNamespace: null,
+    }),
     data: defaultConf.get('data', '${command:AskForDataName}'),
     debugServer: defaultConf.get('debugServer', 4711),
     infosetFormat: 'xml',
@@ -129,41 +167,41 @@ export function getConfig(jsonArgs: object): vscode.DebugConfiguration {
       type: 'file',
       path: '${workspaceFolder}/target/infoset.xml',
     }),
-    tdmlConfig: defaultConf.get('tdmlConfig', {
-      action: 'none',
-      name: '${command:AskForTDMLName}',
-      description: '${command:AskForTDMLDescription}',
-      path: '${command:AskForTDMLPath}',
-    }),
+    tdmlConfig: {
+      ...{
+        action: 'generate',
+        name: 'Default Test Case',
+        path: '${command:AskForValidatedTDMLPath}',
+      },
+      ...((defaultConf.get('tdmlConfig') as object) || {}),
+    },
     stopOnEntry: defaultConf.get('stopOnEntry', true),
     useExistingServer: defaultConf.get('useExistingServer', false),
     trace: defaultConf.get('trace', true),
     openDataEditor: defaultConf.get('openDataEditor', false),
     openInfosetView: defaultConf.get('openInfosetView', false),
     openInfosetDiffView: defaultConf.get('openInfosetDiffView', false),
-    daffodilDebugClasspath: defaultConf.get('daffodilDebugClasspath', ''),
+    daffodilDebugClasspath: defaultConf.get('daffodilDebugClasspath', []),
     dataEditor: defaultConf.get('dataEditor', {
       port: 9000,
       logging: {
         level: 'info',
-        file: '${workspaceFolder}/dataEditor-${omegaEditPort}.log',
+        file: '',
       },
     }),
     dfdlDebugger: defaultConf.get('dfdlDebugger', {
+      daffodilVersion: '3.11.0',
+      timeout: '10s',
       logging: {
         level: 'INFO',
-        file: '/tmp/daffodil-debugger.log',
+        file: '${workspaceFolder}/daffodil-debugger.log',
       },
     }),
   }
 
-  Object.entries(defaultValues).map(
-    ([key, defaultValue]) =>
-      (launchConfigArgs[key] =
-        launchConfigArgs[key] !== undefined
-          ? launchConfigArgs[key]
-          : defaultValue)
-  )
+  for (const [key, defaults] of Object.entries(defaultValues)) {
+    launchConfigArgs[key] = checkSettingValue(launchConfigArgs[key], defaults)
+  }
 
   if (launchConfigArgs.infosetOutput?.type == 'file') {
     checkInfosetFileExtension(
@@ -171,6 +209,18 @@ export function getConfig(jsonArgs: object): vscode.DebugConfiguration {
       launchConfigArgs.infosetFormat!
     )
   }
+
+  // VVVVVVVVVVVVVVVVVVVVVVVV COMPARTMENTALIZED FIX FOR THIRD BULLET POINT OF https://github.com/apache/daffodil-vscode/issues/1540 VVVVVVVVVVVVVVVVVVVVVVVV
+  // Handle setting test case name for TDML Execute action if it's not specified.
+  // This resolves the issue of always defualting to `Default Test Case` even thought a test case name isn't specified when we click on `Execute TDML` when we have opened TDML file
+  const args = jsonArgs as VSCodeLaunchConfigArgs // cast needed b/c of VS Code Typescript errors
+  if (
+    args.tdmlConfig?.action === 'execute' &&
+    args.tdmlConfig?.name === undefined
+  ) {
+    launchConfigArgs.tdmlConfig.name = undefined
+  }
+  // ^^^^^^^^^^^^^^^^^^^^^^^^ COMPARTMENTALIZED FIX FOR THIRD BULLET POINT OF https://github.com/apache/daffodil-vscode/issues/1540 ^^^^^^^^^^^^^^^^^^^^^^^^
 
   return JSON.parse(JSON.stringify(launchConfigArgs))
 }
@@ -226,6 +276,8 @@ export const getTerminal = (
   const terminal = vscode.window.createTerminal({
     name: terminalName,
     hideFromUser: hideTerminal,
+    // Need to specify 'cmd' for windows as by default it will use powershell which causes issues with the envionment varaibles
+    shellPath: osCheck('cmd', undefined),
   })
 
   // Looping to manual set all env variables. Setting "env: env" inside of createTerminal won't override variables already set
@@ -234,7 +286,15 @@ export const getTerminal = (
       let workspaceFolder = vscode.workspace.workspaceFolders
         ? vscode.workspace.workspaceFolders[0].uri.fsPath
         : ''
-      let exportVar = `${osCheck('set', 'export')} ${key}=${env[key]}`
+
+      /*
+       * NOTE: For windows to function properly the set format needs to be:
+       *         set "VARIABLE_NAME=VARIABLE_VALUE"
+       * In bash doing:
+       *         export "VARIABLE_NAME=VARIABLE_VALUE"
+       * didn't cause any issues so this was easiest work around.
+       */
+      let exportVar = `${osCheck('set', 'export')} "${key}=${env[key]}"`
 
       if (exportVar.includes('${workspaceFolder}')) {
         exportVar = exportVar.replaceAll('${workspaceFolder}', workspaceFolder)
@@ -260,7 +320,7 @@ export async function runScript(
   type: string = '',
   hideTerminal: boolean = false,
   port: number | undefined = undefined
-) {
+): Promise<vscode.Terminal> {
   // Get the full path to the script
   const scriptFullPath = path.join(scriptPath, 'bin', scriptName)
 
@@ -299,6 +359,7 @@ export async function runScript(
     const wait_port = require('wait-port')
     await wait_port({ host: '127.0.0.1', port: port, output: 'silent' })
   }
+
   return terminal
 }
 
@@ -337,4 +398,208 @@ export function ensureFile(path: string): string {
     fs.writeFileSync(path, '')
   }
   return path
+}
+
+/**
+ * Substitutes in VSCode and environmental variables into a given string.
+ *
+ * @param input - given string
+ * @param alternativeWorkspace - alternative workspace location if vscode can't find a good workspace
+ * @returns modified input, but with all ${} corresponding to VSCode or Env variables substituted with their
+ */
+export function substituteVSCodeEnvVariables(
+  input: string,
+  alternativeWorkspace?: string
+): string {
+  const workspaceFolder =
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
+    alternativeWorkspace ||
+    ''
+  const homeDir = os.homedir()
+
+  // Common VS Code variables
+  const variableMap: Record<string, string> = {
+    '${workspaceFolder}': workspaceFolder,
+    '${workspaceRoot}': workspaceFolder,
+    '${userHome}': homeDir,
+    '${file}': vscode.window.activeTextEditor?.document.uri.fsPath || '',
+    '${relativeFile}': path.relative(
+      workspaceFolder,
+      vscode.window.activeTextEditor?.document.uri.fsPath || ''
+    ),
+    '${fileBasename}': path.basename(
+      vscode.window.activeTextEditor?.document.uri.fsPath || ''
+    ),
+    '${fileDirname}': path.dirname(
+      vscode.window.activeTextEditor?.document.uri.fsPath || ''
+    ),
+    '${fileExtname}': path.extname(
+      vscode.window.activeTextEditor?.document.uri.fsPath || ''
+    ),
+    '${fileBasenameNoExtension}': path.basename(
+      vscode.window.activeTextEditor?.document.uri.fsPath || '',
+      path.extname(vscode.window.activeTextEditor?.document.uri.fsPath || '')
+    ),
+    '${cwd}': process.cwd(),
+  }
+
+  // Add all environment variables dynamically
+  Object.entries(process.env).forEach(([key, value]) => {
+    if (value) {
+      variableMap[`$\{env:${key}\}`] = value
+    }
+  })
+
+  // Substitute all variables in the input string
+  return Object.entries(variableMap).reduce((result, [variable, value]) => {
+    return result.replaceAll(variable, value)
+  }, input)
+}
+
+/**
+ * Retrieves an array of test case items from a TDML (Test Data Markup Language) file.
+ *
+ * @param path - The file path to the TDML file.
+ * @returns An array of test case names
+ */
+export function getTDMLTestCaseItems(path: string): string[] {
+  if (!fs.existsSync(path)) {
+    return [] // TDML file not found
+  }
+
+  // Needed objects for parsing
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    removeNSPrefix: true,
+  })
+  const fileData = fs.readFileSync(path)
+
+  // representaiton of TDML XML file as JS object
+  const xml_obj = parser.parse(fileData)
+
+  // Read through TDML test cases and populate each TDML test case item if XML file is valid enough
+  // parserTestCaseObjs can be either an array of objects, a single object, or undefined if no parserTestCase element was found
+  // Convert that into an array and return a list containing the names of each parserTestCase element
+  const parserTestCaseObjs = xml_obj['testSuite']?.['parserTestCase']
+  const testCaseArr = Array.isArray(parserTestCaseObjs)
+    ? parserTestCaseObjs
+    : parserTestCaseObjs
+      ? [parserTestCaseObjs]
+      : []
+  return testCaseArr.map((item) => item['@_name'])
+}
+
+/**
+ * Displays a VSCode error message as modal. In some cases such as when running tests, using modal
+ * can cause an error because the dialog service is not available. If this happens when trying
+ * to display the message, this error is grabbed and then message is displayed with modal disabled.
+ *
+ * @param message - The message to display
+ * @param items — A set of items that will be rendered as actions in the message.
+ * @returns — A thenable that resolves to the selected item or undefined when being dismissed.
+ */
+export const displayModalError = async (
+  message: string,
+  ...items: string[]
+): Promise<Thenable<string | undefined>> =>
+  vscode.window
+    .showErrorMessage(message, { modal: true }, ...items)
+    .then(undefined, () =>
+      vscode.window.showErrorMessage(message, { modal: false })
+    )
+
+/**
+ * Make HTTP request with retries and exponential backoff
+ *
+ * @param url The url to fetch
+ * @param options The options for the fetch
+ * @param retries Max number of retries
+ * @param delay Initial delay in ms
+ * @returns Response object
+ */
+export async function fetchRetry(
+  url,
+  options = {},
+  retries = 5,
+  delay = 4000
+): Promise<Response | undefined> {
+  let backoff = delay
+  for (let i = 1; i <= retries; i++) {
+    const res = await fetch(url, options)
+    if (!res.ok || !res.body) {
+      if (i === retries) {
+        throw new Error(
+          `Failed request to ${url}: ${res.status} ${res.statusText}`
+        )
+      } else {
+        await new Promise((r) => setTimeout(r, backoff))
+        backoff = backoff * 2
+      }
+    } else {
+      return res
+    }
+  }
+}
+
+/**
+ * Download and extract a files with a progress bar
+ *
+ * @param title A title to use for printing to the user what is being downloaded
+ * @param url The url to donwload the binary from
+ * @param targetDir The directory to target for extraction
+ */
+export async function downloadAndExtract(
+  title: string,
+  url: string,
+  targetDir: string
+): Promise<void> {
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Downloading ${title}...`,
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ increment: 0, message: 'Starting download...' })
+
+      const res = await fetchRetry(url)
+      if (!res) {
+        throw new Error(`Failed to download ${url}`)
+      }
+
+      const totalBytes = Number(res.headers.get('content-length')) || 0
+      let downloaded = 0
+      let lastPercent = 0
+
+      // Transform stream to track download progress
+      const progressStream = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          downloaded += chunk.length
+          if (totalBytes > 0) {
+            const percent = (downloaded / totalBytes) * 100
+            const increment = percent - lastPercent
+            lastPercent = percent
+            progress.report({
+              increment,
+              message: `${percent.toFixed(1)}%`,
+            })
+          }
+          callback(null, chunk)
+        },
+      })
+
+      await fs.promises.mkdir(targetDir, { recursive: true })
+
+      await pipeline(
+        res.body as any,
+        progressStream,
+        unzip.Extract({ path: targetDir })
+      )
+
+      progress.report({
+        increment: 100 - lastPercent,
+        message: 'Extracting complete!',
+      })
+    }
+  )
 }

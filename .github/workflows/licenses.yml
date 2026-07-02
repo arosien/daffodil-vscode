@@ -1,0 +1,138 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+name: LICENSES CI
+on:
+  push:
+    branches-ignore:
+      - "dependabot/**" # dependabot branches
+      - "update/**" # scala-steward branches
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  rat-check:
+    name: Rat Check
+    strategy:
+      max-parallel: 1
+      matrix:
+        java_distribution: [temurin]
+        java_version: [17]
+        os: [ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SBT: sbt -J-Xms1024m -J-Xmx5120m -J-XX:ReservedCodeCacheSize=512m -J-XX:MaxMetaspaceSize=1024m ++2.13.16
+    steps:
+      ############################################################
+      # Setup
+      ############################################################
+
+      - name: Check out Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: ${{ matrix.java_distribution }}
+          java-version: ${{ matrix.java_version }}
+
+      ############################################################
+      # Rat check
+      ############################################################
+
+      - name: Run Rat Check
+        run: $SBT ratCheck || (cat target/rat.txt; exit 1)
+
+  node-missing-license-data-check:
+    name: Node Missing LICENSE Data Check
+    strategy:
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-22.04]
+        node: ["22.14.0"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      ############################################################
+      # Setup
+      ############################################################
+
+      - name: Check out Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: yarn
+          cache-dependency-path: yarn.lock
+  
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      ############################################################
+      # Node Missing LICENSE Data Check
+      ############################################################
+
+      - name: Run Node Missing LICENSE Data Check
+        run: yarn check-missing-license-data
+
+  node-license-compatibility:
+    name: Node LICENSE Compatibility Check
+    strategy:
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-22.04]
+        node: ["22.14.0"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      ############################################################
+      # Setup
+      ############################################################
+
+      - name: Check out Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      ############################################################
+      # Node LICENSE Compatibility Check
+      ############################################################
+
+      - name: Run Node LICENSE Compatibility Check
+        run: yarn check-license-compatibility

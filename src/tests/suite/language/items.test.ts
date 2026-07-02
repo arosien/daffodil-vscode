@@ -17,15 +17,16 @@
 
 import * as assert from 'assert'
 import { attributeCompletion } from '../../../language/providers/intellisense/attributeItems'
-import { commonCompletion } from '../../../language/providers/intellisense/commonItems'
 import { elementCompletion } from '../../../language/providers/intellisense/elementItems'
 
 suite('Items Test Suite', () => {
   const expectedElementItems = [
     'xml version',
     'schema',
+    'element',
     'element name',
     'element ref',
+    'group',
     'group name',
     'group ref',
     'dfdl:assert',
@@ -34,13 +35,14 @@ suite('Items Test Suite', () => {
     'annotation',
     'appinfo',
     'complexType',
-    'complexType name=',
+    'complexType name',
     'simpleType',
-    'simpleType name=',
+    'simpleType name',
     'sequence',
     'choice',
     'dfdl:newVariableInstance',
     'dfdl:defineVariable',
+    'dfdl:defineVariable name',
     'dfdl:setVariable',
     'dfdl:defineFormat',
     'dfdl:defineEscapeScheme',
@@ -70,12 +72,18 @@ suite('Items Test Suite', () => {
   const expectedAttributeItems = [
     'name',
     'ref',
+    'default',
+    'fixed',
     'minOccurs',
     'maxOccurs',
+    'nillable',
+    'type',
+    'base',
     'dfdl:occursCount',
     'dfdl:byteOrder',
     'dfdl:bitOrder',
     'dfdl:occursCountKind',
+    'dfdl:occursStopValue',
     'dfdl:length',
     'dfdl:lengthKind',
     'dfdl:prefixIncludesPrefixLength',
@@ -106,6 +114,7 @@ suite('Items Test Suite', () => {
     'dfdl:decimalSigned',
     'dfdl:textNumberRep',
     'dfdl:textNumberJustification',
+    'dfdl:textNumberPadCharacter',
     'dfdl:textNumberRoundingMode',
     'dfdl:textNumberRoundingIncrement',
     'dfdl:textNumberRounding',
@@ -155,6 +164,10 @@ suite('Items Test Suite', () => {
     'dfdl:calendarDaysInFirstWeek',
     'dfdl:calendarCenturyStart',
     'dfdl:calendarLanguage',
+    'dfdl:textCalendarJustification',
+    'dfdl:textCalendarPadCharacter',
+    'dfdl:binaryCalendarRep',
+    'dfdl:binaryCalendarEpoch',
     'dfdl:documentFinalTerminatorCanBeMissing',
     'dfdl:emptyValueDelimiterPolicy',
     'dfdl:emptyElementParsePolicy',
@@ -172,13 +185,9 @@ suite('Items Test Suite', () => {
     'testPattern',
     'message',
     'failureType',
+    'schemaLocation',
+    'namespace',
   ]
-
-  test('all commonItems available', async () => {
-    let itemNames: string[] = []
-    commonCompletion('').items.forEach((r) => itemNames.push(r.item))
-    assert.strictEqual(itemNames.includes('type'), true)
-  })
 
   test('all elementItems available', async () => {
     elementCompletion('', '').items.forEach((item) => {

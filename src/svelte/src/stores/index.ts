@@ -189,6 +189,7 @@ export const visableViewports = writable('all' as VisibleViewports)
 
 export const searchResultsUpdated = writable(false)
 
+export const dfdlBytePos = writable(-1)
 /**************************************************************************/
 /*                          Derived Stores                                */
 /**************************************************************************/
@@ -419,6 +420,7 @@ export const applicable = derived(
     $regularSizedFile,
   ]) => {
     if (!$regularSizedFile) {
+      if ($viewport.length < 0) return false
       return $viewport.data.length !=
         $editorSelection.length / radixBytePad($displayRadix) &&
         $editorActionsAllowed === EditActionRestrictions.OverwriteOnly

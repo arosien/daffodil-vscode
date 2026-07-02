@@ -19,24 +19,27 @@ import { TDMLConfig } from './tdmlConfig'
 import { DataEditorConfig } from './dataEditor'
 import { InfosetOutput } from '../daffodilDebugger'
 import { DFDLDebugger } from './dfdlDebugger'
+import { SchemaData } from './schemaData'
 
 export interface VSCodeLaunchConfigArgs {
   name: string
   request: string
   type: string
-  schema: string | boolean
-  data: string | boolean
+  schema: SchemaData
+  data: string
   debugServer: number | boolean
   infosetFormat: string | null
   infosetOutput: InfosetOutput | null
-  tdmlConfig: TDMLConfig | null
+  tdmlConfig: TDMLConfig
   dataEditor: DataEditorConfig | null
   stopOnEntry: boolean
   useExistingServer: boolean
   trace: boolean
+  tunables?: Record<string, string>
+  variables?: Record<string, string>
   openDataEditor: boolean
   openInfosetView: boolean
   openInfosetDiffView: boolean
-  daffodilDebugClasspath: string
+  daffodilDebugClasspath: Array<string>
   dfdlDebugger: DFDLDebugger
 }

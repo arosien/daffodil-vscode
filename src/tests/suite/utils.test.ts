@@ -28,7 +28,11 @@ suite('Utils Test Suite', () => {
     name: 'Default Config',
     request: 'launch',
     type: 'dfdl',
-    schema: '${command:AskForSchemaName}',
+    schema: {
+      path: '${command:AskForSchemaName}',
+      rootName: null,
+      rootNamespace: null,
+    },
     data: '${command:AskForDataName}',
     debugServer: 4711,
     infosetFormat: 'xml',
@@ -37,10 +41,9 @@ suite('Utils Test Suite', () => {
       path: '${workspaceFolder}/target/infoset.xml',
     },
     tdmlConfig: {
-      action: 'none',
-      name: '${command:AskForTDMLName}',
-      description: '${command:AskForTDMLDescription}',
-      path: '${command:AskForTDMLPath}',
+      action: 'generate',
+      name: 'Default Test Case',
+      path: '${command:AskForValidatedTDMLPath}',
     },
     stopOnEntry: true,
     useExistingServer: false,
@@ -48,18 +51,20 @@ suite('Utils Test Suite', () => {
     openDataEditor: false,
     openInfosetView: false,
     openInfosetDiffView: false,
-    daffodilDebugClasspath: '',
+    daffodilDebugClasspath: [],
     dataEditor: {
       port: 9000,
       logging: {
-        file: '${workspaceFolder}/dataEditor-${omegaEditPort}.log',
+        file: '',
         level: 'info',
       },
     },
     dfdlDebugger: {
+      daffodilVersion: '3.11.0',
+      timeout: '10s',
       logging: {
         level: 'INFO',
-        file: '/tmp/daffodil-debugger.log',
+        file: '${workspaceFolder}/daffodil-debugger.log',
       },
     },
   }

@@ -19,19 +19,24 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 
 import * as daf from '../daffodilDebugger'
-import { ensureFile, tmpFile } from '../utils'
+import { displayModalError, ensureFile, tmpFile } from '../utils'
+import { outputChannel } from './activateDaffodilDebug'
 
 export function handleDebugEvent(e: vscode.DebugSessionCustomEvent) {
   switch (e.event) {
     case daf.infosetEvent:
       let update: daf.InfosetEvent = e.body
       let path = ensureFile(tmpFile(e.session.id))
-      fs.copyFileSync(path, `${path}.prev`)
+      fs.copyFileSync(path, `${path}.prev.xml`)
       fs.writeFileSync(path, update.content)
       break
     // this allows for any error event to be caught in this case
     case e.event.startsWith('daffodil.error') ? e.event : '':
-      vscode.window.showErrorMessage(`debugger ${e.event}`)
+      if (!e.body.message.startsWith('Schema Definition Error:')) {
+        displayModalError(e.body.message)
+      }
+      outputChannel.appendLine(e.body.message)
+      outputChannel.show(true)
       break
   }
 }

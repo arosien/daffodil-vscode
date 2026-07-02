@@ -30,17 +30,17 @@ import com.microsoft.java.debug.core.protocol.Responses._
 import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
 import fs2._
-import fs2.concurrent.Signal
+import fs2.concurrent._
 import java.io._
 import java.net._
 import java.nio.file.Path
 import java.nio.file.Paths
+import org.apache.daffodil.lib.util.Misc
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
-import scala.collection.JavaConverters._
 import scala.concurrent.duration._
-
+import scala.jdk.CollectionConverters._
 import logging._
 
 /** Communication interface to a DAP server while in a connected session. */
@@ -49,9 +49,9 @@ trait DAPSession[Req, Res, Ev] {
 
   def sendResponse(response: Res): IO[Unit]
   def sendEvent(event: Ev): IO[Unit]
-  def abort(event: DebugEvent): IO[Unit]
-  def abort(event: DebugEvent, logMessage: String): IO[Unit]
-  def abort(event: DebugEvent, logMessage: String, t: Throwable): IO[Unit]
+  def abort(event: Ev): IO[Unit]
+  def abort(event: Ev, logMessage: String): IO[Unit]
+  def abort(event: Ev, logMessage: String, t: Throwable): IO[Unit]
 }
 
 object DAPSession {
@@ -73,18 +73,18 @@ object DAPSession {
 
       /** Log error then send DebugEvent back to extension and exit session, ending debug */
       def abort(event: DebugEvent, logMessage: String): IO[Unit] =
-        Logger[IO].error(logMessage) *> sendEvent(event) *> sendEvent(new Events.TerminatedEvent())
+        Logger[IO].error(logMessage) *> abort(event)
 
       def abort(event: DebugEvent, logMessage: String, t: Throwable): IO[Unit] =
-        Logger[IO].error(t)(logMessage) *> sendEvent(event) *> sendEvent(new Events.TerminatedEvent())
+        Logger[IO].error(t)(logMessage) *> abort(event)
     }
 
   def resource(socket: Socket): Resource[IO, DAPSession[Request, Response, DebugEvent]] =
     for {
       dispatcher <- Dispatcher.parallel[IO]
-      requests <- Resource.eval(Queue.bounded[IO, Option[Request]](10))
+      requests <- Channel.bounded[IO, Request](10).toResource
       server <- Server.resource(socket.getInputStream, socket.getOutputStream, dispatcher, requests)
-      session = DAPSession(server, Stream.fromQueueNoneTerminated(requests))
+      session = DAPSession(server, requests.stream)
     } yield session
 
   /** Wraps an AbstractProtocolServer into an IO-based interface. */
@@ -92,15 +92,15 @@ object DAPSession {
       in: InputStream,
       out: OutputStream,
       dispatcher: Dispatcher[IO],
-      requests: QueueSink[IO, Option[Request]]
+      requests: Channel[IO, Request]
   ) extends AbstractProtocolServer(in, out) {
     def dispatchRequest(request: Request): Unit =
       dispatcher.unsafeRunSync {
         for {
           _ <- Logger[IO].info(show"R> $request")
-          _ <- requests.offer(Some(request)).recoverWith {
+          _ <- requests.send(request).void.recoverWith {
             // format: off
-            case t => Logger[IO].error(t)(show"error during handling of request $request")
+            case t: Throwable => Logger[IO].error(t)(show"error during handling of request $request")
             // format: on
           }
         } yield ()
@@ -114,10 +114,10 @@ object DAPSession {
         in: InputStream,
         out: OutputStream,
         dispatcher: Dispatcher[IO],
-        requests: QueueSink[IO, Option[Request]]
+        requests: Channel[IO, Request]
     ): Resource[IO, AbstractProtocolServer] =
       Resource
-        .make(IO(new Server(in, out, dispatcher, requests)))(server => IO(server.stop()) *> requests.offer(None).void)
+        .make(IO(new Server(in, out, dispatcher, requests)))(server => IO(server.stop()) *> requests.close.void)
         .flatTap(server => IO.blocking(server.run).background)
   }
 
@@ -127,7 +127,7 @@ object DAPSession {
 class DAPodil(
     session: DAPSession[Request, Response, DebugEvent],
     state: Ref[IO, DAPodil.State],
-    hotswap: Hotswap[IO, DAPodil.State], // manages those states that have their own resource management
+    hotswap: NonEmptyHotswap[IO, DAPodil.State], // manages those states that have their own resource management
     debugee: Request => EitherNel[String, Resource[IO, DAPodil.Debugee]],
     whenDone: Deferred[IO, DAPodil.Done]
 ) {
@@ -167,7 +167,7 @@ class DAPodil(
   def handle(request: Request): IO[Unit] =
     // TODO: java-debug doesn't seem to support the Restart request
     request match {
-      case extract(Command.INITIALIZE, _) => initialize(request)
+      case extract(Command.INITIALIZE, _)        => initialize(request)
       case extract(Command.CONFIGURATIONDONE, _) =>
         session.sendResponse(request.respondSuccess())
       case extract(Command.LAUNCH, _) =>
@@ -180,20 +180,25 @@ class DAPodil(
         source(request, args)
       case extract(Command.SETBREAKPOINTS, args: SetBreakpointArguments) =>
         setBreakpoints(request, args)
-      case extract(Command.THREADS, _)    => threads(request)
-      case extract(Command.STACKTRACE, _) => stackTrace(request)
+      case extract(Command.THREADS, _)                    => threads(request)
+      case extract(Command.STACKTRACE, _)                 => stackTrace(request)
       case extract(Command.SCOPES, args: ScopesArguments) =>
         scopes(request, args)
       case extract(Command.VARIABLES, args: VariablesArguments) =>
         variables(request, args)
-      case extract(Command.NEXT, _)     => next(request)
-      case extract(Command.CONTINUE, _) => continue(request)
-      case extract(Command.PAUSE, _)    => pause(request)
+      case extract(Command.NEXT, _)                               => next(request)
+      case extract(Command.CONTINUE, _)                           => continue(request)
+      case extract(Command.PAUSE, _)                              => pause(request)
       case extract(Command.DISCONNECT, args: DisconnectArguments) =>
         disconnect(request, args)
       case extract(Command.EVALUATE, args: EvaluateArguments) =>
         eval(request, args)
-      case _ => session.abort(ErrorEvents.UnhandledRequest, show"unhandled request $request")
+      case extract(Command.STEPIN, _) =>
+        stepIn(request)
+      case extract(Command.STEPOUT, _) =>
+        stepOut(request)
+      case _ =>
+        session.abort(ErrorEvent.UnhandledRequest(show"unhandled request $request"), show"unhandled request $request")
     }
 
   /** State.Uninitialized -> State.Initialized */
@@ -218,13 +223,13 @@ class DAPodil(
           case Left(errors) =>
             state.set(DAPodil.State.FailedToLaunch(request, errors, None)) *>
               session.abort(
-                ErrorEvents.LaunchArgsParseError,
+                ErrorEvent.LaunchArgsParseError(show"error parsing launch args: ${errors.mkString_("\n")}"),
                 show"error parsing launch args: ${errors.mkString_("\n")}"
               )
           case Right(dbgee) =>
             for {
               launched <- hotswap.swap {
-                DAPodil.State.Launched.resource(session, dbgee)
+                DAPodil.State.Launched.resource(session, dbgee).evalTap(state.set)
               }.attempt
 
               _ <- launched match {
@@ -233,10 +238,9 @@ class DAPodil(
                     DAPodil.State
                       .FailedToLaunch(request, NonEmptyList.of("couldn't launch from created debuggee"), Some(t))
                   ) *>
-                    session.abort(ErrorEvents.RequestError, show"couldn't launch, request $request", t)
-                case Right(launchedState) =>
-                  state.set(launchedState) *>
-                    session.sendResponse(request.respondSuccess())
+                    session.abort(ErrorEvent.RequestError(t.getMessage), show"couldn't launch, request $request", t)
+                case Right(_) => // launchedState is now Unit, so we just send the success response
+                  session.sendResponse(request.respondSuccess())
               }
             } yield ()
         }
@@ -246,14 +250,14 @@ class DAPodil(
   def loadedSources(request: Request): IO[Unit] =
     state.get.flatMap {
       case DAPodil.State.Launched(debugee) =>
-        debugee.sources.flatMap { sources =>
+        debugee.sources().flatMap { sources =>
           session.sendResponse(
             request.respondSuccess(
               DAPodil.LoadedSources(sources)
             )
           )
         }
-      case _ => session.abort(ErrorEvents.SourceError)
+      case s => DAPodil.InvalidState.raise(request, "Launched", s)
     }
 
   def source(request: Request, args: SourceArguments): IO[Unit] =
@@ -263,11 +267,11 @@ class DAPodil(
           .sourceContent(DAPodil.Source.Ref(args.sourceReference))
           .flatMap {
             case None =>
-              session.abort(ErrorEvents.SourceError)
+              session.abort(ErrorEvent.SourceError(show"no source with reference ${args.sourceReference} found"))
             case Some(content) =>
               session.sendResponse(request.respondSuccess(new SourceResponseBody(content.value, "text/xml")))
           }
-      case _ => session.abort(ErrorEvents.SourceError)
+      case s => DAPodil.InvalidState.raise(request, "Launched", s)
     }
 
   def setBreakpoints(request: Request, args: SetBreakpointArguments): IO[Unit] =
@@ -327,7 +331,7 @@ class DAPodil(
     state.get.flatMap {
       case DAPodil.State.Launched(debugee) =>
         for {
-          _ <- debugee.step
+          _ <- debugee.stepOver()
           _ <- session.sendResponse(request.respondSuccess())
         } yield ()
       case s => DAPodil.InvalidState.raise(request, "Launched", s)
@@ -357,27 +361,29 @@ class DAPodil(
     session
       .sendResponse(request.respondSuccess())
       .guarantee {
-        hotswap.clear *> whenDone.complete(DAPodil.Done(args.restart)).void
+        whenDone.complete(DAPodil.Done(args.restart)).void
       }
 
   def scopes(request: Request, args: ScopesArguments): IO[Unit] =
     state.get.flatMap {
       case DAPodil.State.Launched(debugee) =>
         for {
-          data <- debugee.data.get
+          data <- debugee.data().get
           _ <- data.stack
             .findFrame(DAPodil.Frame.Id(args.frameId))
             .fold(
               session.sendResponse(
                 request.respondFailure(
                   Some(
-                    s"couldn't find scopes for frame ${args.frameId}: ${data.stack.frames.map(f => f.id -> f.stackFrame.name)}; this is likely due to the front end advancing via 'continue' or 'next' before this request was eventually made"
+                    s"couldn't find scopes for frame ${args.frameId}: ${data.stack.frames
+                        .map(f => f.id -> f.stackFrame.name)}; this is likely due to the front end advancing via 'continue' or 'next' before this request was eventually made"
                   )
                 )
               )
             ) { frame =>
               session.sendResponse(
-                request.respondSuccess(new Responses.ScopesResponseBody(frame.scopes.map(_.toDAP()).asJava))
+                request
+                  .respondSuccess(new Responses.ScopesResponseBody(frame.scopes.map(_.toDAP()).asJava))
               )
             }
         } yield ()
@@ -389,7 +395,7 @@ class DAPodil(
       case DAPodil.State.Launched(debugee) =>
         // return the variables for the requested "variablesReference", which is associated with a scope, which is associated with a stack frame
         for {
-          data <- debugee.data.get
+          data <- debugee.data().get
           _ <- data.stack
             .variables(DAPodil.VariablesReference(args.variablesReference))
             .fold(
@@ -401,7 +407,9 @@ class DAPodil(
                 )
               )
             )(variables =>
-              session.sendResponse(request.respondSuccess(new Responses.VariablesResponseBody(variables.asJava)))
+              session.sendResponse(
+                request.respondSuccess(new Responses.VariablesResponseBody(variables.asJava))
+              )
             )
         } yield ()
       case s => DAPodil.InvalidState.raise(request, "Launched", s)
@@ -413,10 +421,31 @@ class DAPodil(
         for {
           variable <- launched.debugee.eval(args)
           _ <- variable match {
-            case None => session.abort(ErrorEvents.UnexpectedError)
+            case None =>
+              session.abort(ErrorEvent.UnexpectedError(show"expression couldn't be evaluated: ${args.expression}"))
             case Some(v) =>
               session.sendResponse(request.respondSuccess(new Responses.EvaluateResponseBody(v.value, 0, null, 0)))
           }
+        } yield ()
+      case s => DAPodil.InvalidState.raise(request, "Launched", s)
+    }
+
+  def stepIn(request: Request): IO[Unit] =
+    state.get.flatMap {
+      case DAPodil.State.Launched(debugee) =>
+        for {
+          _ <- debugee.stepIn()
+          _ <- session.sendResponse(request.respondSuccess())
+        } yield ()
+      case s => DAPodil.InvalidState.raise(request, "Launched", s)
+    }
+
+  def stepOut(request: Request): IO[Unit] =
+    state.get.flatMap {
+      case DAPodil.State.Launched(debugee) =>
+        for {
+          _ <- debugee.stepOut()
+          _ <- session.sendResponse(request.respondSuccess())
         } yield ()
       case s => DAPodil.InvalidState.raise(request, "Launched", s)
     }
@@ -432,7 +461,7 @@ object DAPodil extends IOApp {
       Opts
         .option[Duration]("listenTimeout", "duration to wait for a DAP client connection (default: 10s)")
         .withDefault(10.seconds)
-    ).mapN(Options)
+    ).mapN(Options.apply)
 
   implicit val logger: Logger[IO] = Slf4jLogger.getLogger
 
@@ -443,11 +472,11 @@ object DAPodil extends IOApp {
         |
         |Build info:
         |  version: ${BuildInfo.version}
-        |  daffodilVersion: ${BuildInfo.daffodilVersion}
         |  scalaVersion: ${BuildInfo.scalaVersion}
         |  sbtVersion: ${BuildInfo.sbtVersion}
         |Runtime info:
         |  JVM version: ${System.getProperty("java.version")} (${System.getProperty("java.home")})
+        |  Daffodil Version: ${Misc.getDaffodilVersion}
         |******************************************************""".stripMargin
 
   def run(args: List[String]): IO[ExitCode] =
@@ -465,10 +494,12 @@ object DAPodil extends IOApp {
       _ <- Logger[IO].info(header)
       _ <- options match {
         case Options(listenPort, listenTimeout) =>
-          Logger[IO].info(s"launched with options listenPort: $listenPort, listenTimeout: $listenTimeout")
+          Logger[IO].info(
+            s"launched with options listenPort: $listenPort, listenTimeout: $listenTimeout"
+          )
       }
 
-      state <- Ref[IO].of[State](State.Uninitialized)
+      _ <- Ref[IO].of[State](State.Uninitialized) // state for the DAPodil instance
 
       address = new InetSocketAddress(InetAddress.getLoopbackAddress, options.listenPort)
       serverSocket = {
@@ -483,8 +514,8 @@ object DAPodil extends IOApp {
         .as(ExitCode.Success)
         .recoverWith {
           // format: off
-          case _: SocketTimeoutException => 
-            Logger[IO].warn(s"timed out listening for connection on $uri, exiting").as(ExitCode.Error)
+          case _: SocketTimeoutException =>
+            Logger[IO].error(s"timed out listening for connection on $uri, exiting").as(ExitCode.Error)
           // format: on
         }
 
@@ -512,11 +543,10 @@ object DAPodil extends IOApp {
       debugee: Request => EitherNel[String, Resource[IO, Debugee]]
   ): Resource[IO, IO[Done]] =
     for {
-      state <- Resource.eval(Ref[IO].of[State](State.Uninitialized))
-      hotswap <- Hotswap
-        .create[IO, State]
+      state <- Ref[IO].of[State](State.Uninitialized).toResource
+      hotswap <- NonEmptyHotswap[IO, State](Resource.pure(State.Uninitialized))
         .onFinalizeCase(ec => Logger[IO].debug(s"hotswap: $ec"))
-      whenDone <- Resource.eval(Deferred[IO, Done])
+      whenDone <- Deferred[IO, Done].toResource
       dapodil = new DAPodil(
         session,
         state,
@@ -524,12 +554,10 @@ object DAPodil extends IOApp {
         debugee,
         whenDone
       )
-      _ <- dapodil.handleRequests.compile.lastOrError
-        .onError(
-          Logger[IO]
-            .error(_)("unhandled error") *> whenDone.complete(Done(false)).void
-        )
-        .background
+      _ <- dapodil.handleRequests.compile.lastOrError.onError { case e =>
+        Logger[IO]
+          .error(e)("unhandled error") *> whenDone.complete(Done(false)).void
+      }.background
 
     } yield whenDone.get
 
@@ -541,7 +569,6 @@ object DAPodil extends IOApp {
   trait Debugee {
     // TODO: extract "control" interface from "state" interface
     def data(): Signal[IO, Data]
-    def state(): Stream[IO, Debugee.State]
     def events(): Stream[IO, Events.DebugEvent]
 
     def sources(): IO[List[Source]]
@@ -549,12 +576,15 @@ object DAPodil extends IOApp {
     def sourceChanges(): Stream[IO, Source]
 
     def awaitFirstStackFrame(): IO[Unit] =
-      data.discrete
+      data().discrete
         .collectFirst { case d if !d.stack.frames.isEmpty => () }
         .compile
         .lastOrError
 
-    def step(): IO[Unit]
+    def stepOver(): IO[Unit]
+    def stepIn(): IO[Unit]
+    def stepOut(): IO[Unit]
+
     def continue(): IO[Unit]
     def pause(): IO[Unit]
     def setBreakpoints(uri: URI, lines: List[DAPodil.Line]): IO[Unit]
@@ -569,6 +599,13 @@ object DAPodil extends IOApp {
       case class Stopped(reason: Stopped.Reason) extends State
 
       object Stopped {
+        def entry: Stopped = Stopped(Reason.Entry)
+        def pause: Stopped = Stopped(Reason.Pause)
+        def stepOver: Stopped = Stopped(Reason.StepOver)
+        def stepIn: Stopped = Stopped(Reason.StepIn)
+        def stepOut: Stopped = Stopped(Reason.StepOut)
+        def breakpointHit(location: DAPodil.Location): Stopped = Stopped(Reason.BreakpointHit(location))
+
         sealed trait Reason
 
         object Reason {
@@ -582,7 +619,9 @@ object DAPodil extends IOApp {
           case object Pause extends Reason
 
           /** The user requested a step, which completed, so now we are stopped again. */
-          case object Step extends Reason
+          case object StepOver extends Reason
+          case object StepIn extends Reason
+          case object StepOut extends Reason
 
           /** A breakpoint was hit. */
           case class BreakpointHit(location: DAPodil.Location) extends Reason
@@ -598,8 +637,8 @@ object DAPodil extends IOApp {
     case object Uninitialized extends State
     case object Initialized extends State
     case class Launched(debugee: Debugee) extends State {
-      val stackTrace: IO[StackTrace] = debugee.data.get.map(_.stack)
-      val threads: IO[List[Types.Thread]] = debugee.data.get.map(_.threads)
+      val stackTrace: IO[StackTrace] = debugee.data().get.map(_.stack)
+      val threads: IO[List[Types.Thread]] = debugee.data().get.map(_.threads)
     }
     case class FailedToLaunch(request: Request, reasons: NonEmptyList[String], cause: Option[Throwable]) extends State
 
@@ -626,32 +665,21 @@ object DAPodil extends IOApp {
             .lastOrError
             .onFinalizeCase(ec => Logger[IO].debug(s"launched: $ec"))
 
-          _ <- Resource.eval(session.sendEvent(new Events.ThreadEvent("started", 1L)))
+          _ <- session.sendEvent(new Events.ThreadEvent("started", 1L)).toResource
         } yield launched
     }
 
     def deliverEvents(debugee: Debugee, session: DAPSession[Request, Response, DebugEvent]): Stream[IO, Unit] = {
-      val stoppedEventsDelivery = debugee.state
-        .collect {
-          case Debugee.State.Stopped(Debugee.State.Stopped.Reason.Entry) =>
-            new Events.StoppedEvent("entry", 1L)
-          case Debugee.State.Stopped(Debugee.State.Stopped.Reason.Pause) =>
-            new Events.StoppedEvent("pause", 1L)
-          case Debugee.State.Stopped(Debugee.State.Stopped.Reason.Step) =>
-            new Events.StoppedEvent("step", 1L)
-          case Debugee.State.Stopped(Debugee.State.Stopped.Reason.BreakpointHit(location)) =>
-            new Events.StoppedEvent("breakpoint", 1L, false, show"Breakpoint hit at $location", null)
-        }
-        .onFinalizeCase(ec => Logger[IO].debug(s"deliverStoppedEvents: $ec"))
-
-      val dapEvents = debugee.events
+      val dapEvents = debugee
+        .events()
         .onFinalizeCase(ec => Logger[IO].debug(s"dapEvents: $ec"))
 
-      val sourceEventsDelivery = debugee.sourceChanges
+      val sourceEventsDelivery = debugee
+        .sourceChanges()
         .map(source => DAPodil.LoadedSourceEvent("changed", source.toDAP))
         .onFinalizeCase(ec => Logger[IO].debug(s"sourceEventsDelivery: $ec"))
 
-      Stream(stoppedEventsDelivery, dapEvents, sourceEventsDelivery).parJoinUnbounded
+      Stream(dapEvents, sourceEventsDelivery).parJoinUnbounded
         .evalMap(session.sendEvent)
         .onFinalize(
           session.sendEvent(new Events.ThreadEvent("exited", 1L)) *>
@@ -678,7 +706,7 @@ object DAPodil extends IOApp {
       copy(stack = stack.push(frame))
 
     def pop(): Data =
-      copy(stack = stack.pop) // TODO: warn of bad pop
+      copy(stack = stack.pop()) // TODO: warn of bad pop
   }
 
   object Data {
@@ -748,11 +776,8 @@ object DAPodil extends IOApp {
       copy(value = value + (uri.normalize -> lines))
 
     def contains(location: Location): Boolean =
-      value.exists {
-        // format: off
-        case (uri, lines) =>
-          uri == location.uri && lines.exists(_ == location.line)
-        // format: on
+      value.exists { case (uri, lines) =>
+        Portability.fixWindowsDriveLetter(uri.getPath) == location.uri.getPath && lines.exists(_ == location.line)
       }
   }
 

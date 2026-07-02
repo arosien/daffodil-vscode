@@ -137,7 +137,7 @@ limitations under the License.
   }
 
   function replaceStart() {
-    if (replaceable) {
+    if (replaceable && !replaceErrDisplay) {
       matchOffset = -1
       replaceStarted = true
       searchStarted = false
@@ -251,8 +251,9 @@ limitations under the License.
           // subtract 1 from the next offset because search next will add 1
           matchOffset = msg.data.data.nextOffset - 1
           replaceQuery.addResult({
-            byteLength: msg.data.data.replaceDataBytesLength, 
-            offset: msg.data.data.nextOffset - msg.data.data.replaceDataBytesLength
+            byteLength: msg.data.data.replaceDataBytesLength,
+            offset:
+              msg.data.data.nextOffset - msg.data.data.replaceDataBytesLength,
           })
           preReplaceHasPrev = hasPrev
           justReplaced = true
@@ -263,11 +264,10 @@ limitations under the License.
         }
         $replaceQuery.processing = false
         break
-  
+
       case MessageCommand.clearChanges:
         cancel()
         break
-
     }
   })
 </script>
@@ -281,7 +281,7 @@ limitations under the License.
         placeholder="Seek To Offset (base {$addressRadix})"
         allowDefaultInput="true"
         bind:value={$seekOffsetInput}
-        on:inputEnter={handleInputEnter}
+        on:inputEnter={$seekable.valid ? handleInputEnter : () => {}}
       >
         {#if $seekOffsetSearchType === OffsetSearchType.RELATIVE}
           <Tooltip
@@ -403,7 +403,7 @@ limitations under the License.
           <Button
             fn={replace}
             description="Replace the current match"
-            disabledBy={!replaceable}
+            disabledBy={!replaceable || replaceErrDisplay}
           >
             <span slot="left" class="btn-icon material-symbols-outlined"
               >find_replace</span

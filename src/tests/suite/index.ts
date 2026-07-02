@@ -17,39 +17,44 @@
 
 import * as path from 'path'
 const Mocha = require('mocha')
-const glob = require('glob')
+const { glob } = require('glob')
+
+// needed for aliases to resolve in tests
+require('ts-node/register')
+require('tsconfig-paths/register')
 
 export function run(): Promise<void> {
   // Create the mocha test
   const mocha = new Mocha({
     ui: 'tdd',
     color: true,
-    timeout: 999999,
+    timeout: '30m',
   })
 
   const testsRoot = path.resolve(__dirname, '..')
 
   return new Promise((c, e) => {
-    glob('**/*.test.js', { cwd: testsRoot }, (err, files) => {
-      if (err) {
-        return e(err)
-      }
+    glob('**/*.test.js', { cwd: testsRoot })
+      .then((files) => {
+        // Add files to the test suite
+        files.forEach((f) => mocha.addFile(path.resolve(testsRoot, f)))
 
-      // Add files to the test suite
-      files.forEach((f) => mocha.addFile(path.resolve(testsRoot, f)))
-
-      try {
-        mocha.run((failures) => {
-          if (failures > 0) {
-            e(new Error(`${failures} tests failed.`))
-          } else {
-            c()
-          }
-        })
-      } catch (err) {
+        try {
+          mocha.run((failures) => {
+            if (failures > 0) {
+              e(new Error(`${failures} tests failed.`))
+            } else {
+              c()
+            }
+          })
+        } catch (err) {
+          console.error(err)
+          e(err)
+        }
+      })
+      .catch((err) => {
         console.error(err)
         e(err)
-      }
-    })
+      })
   })
 }

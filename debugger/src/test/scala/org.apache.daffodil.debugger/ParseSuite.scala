@@ -24,15 +24,15 @@ class ParseSuite extends FunSuite {
   val name = "Default Config"
   val request = "launch"
   val launchType = "dfdl"
-  var schema = Paths.get("./src/test/data/emptySchema.dfdl.xsd").toAbsolutePath().toString()
-  var data = Paths.get("./src/test/data/emptyData.xml").toAbsolutePath().toString()
+  val schema = new JsonObject()
+  var schemaPath = Paths.get("../../../debugger/src/test/data/emptySchema.dfdl.xsd").toAbsolutePath().toString()
+  var data = Paths.get("../../../debugger/src/test/data/emptyData.xml").toAbsolutePath().toString()
   val debugServer = 4711
   val infosetFormat = "xml"
   var infosetOutputType = "none"
   var infosetOutputPath = "testPath/infoset.xml"
   var tdmlAction = ""
   val tdmlName = "Test TDML Name"
-  val tdmlDescription = "Test TDML Description"
   val tdmlPath = "testPath/test.tdml"
   val stopOnEntry = true
   val useExistingServer = false
@@ -46,8 +46,8 @@ class ParseSuite extends FunSuite {
   var testTDMLObject = new JsonObject()
 
   override def beforeEach(context: BeforeEach): Unit = {
-    schema = Paths.get("./src/test/data/emptySchema.dfdl.xsd").toAbsolutePath().toString()
-    data = Paths.get("./src/test/data/emptyData.xml").toAbsolutePath().toString()
+    schemaPath = Paths.get("../../../debugger/src/test/data/emptySchema.dfdl.xsd").toAbsolutePath().toString()
+    data = Paths.get("../../../debugger/src/test/data/emptyData.xml").toAbsolutePath().toString()
     infosetOutputType = "none"
     infosetOutputPath = "testPath/infoset.xml"
     tdmlAction = ""
@@ -63,10 +63,13 @@ class ParseSuite extends FunSuite {
 
   test("Parse failed - No Schema") {
     buildJson()
-    testJsonObject.remove("schema")
+    schema.remove("path")
     val parseResult = Parse.Debugee.LaunchArgs.parse(testJsonObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "missing 'schema' field from launch request")
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "missing 'schema.path' field from launch request"
+    )
   }
 
   test("Parse failed - No data") {
@@ -74,7 +77,10 @@ class ParseSuite extends FunSuite {
     testJsonObject.remove("data")
     val parseResult = Parse.Debugee.LaunchArgs.parse(testJsonObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "missing 'data' field from launch request")
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "missing 'data' field from launch request"
+    )
   }
 
   // This test succeeds because stopOnEntry defaults if it is empty
@@ -98,7 +104,10 @@ class ParseSuite extends FunSuite {
     buildJson()
     val parseResult = Parse.Debugee.LaunchArgs.parse(testJsonObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "can't write to infoset output file at " + infosetOutputPath)
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "can't write to infoset output file at " + infosetOutputPath
+    )
     infosetOutputType = "none"
     infosetOutputPath = "testPath/infoset.xml"
   }
@@ -109,16 +118,10 @@ class ParseSuite extends FunSuite {
     testTDMLObject.remove("name")
     val parseResult = Parse.Debugee.parseTDMLName(testTDMLObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "missing 'tdmlConfig.name' field from launch request")
-  }
-
-  test("Parse failed - invalid tdmlConfig - no description") {
-    tdmlAction = "generate"
-    buildJson()
-    testTDMLObject.remove("description")
-    val parseResult = Parse.Debugee.parseTDMLDescription(testTDMLObject)
-    assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "missing 'tdmlConfig.description' field from launch request")
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "missing 'tdmlConfig.name' field from launch request"
+    )
   }
 
   test("Parse failed - invalid tdmlConfig - no path") {
@@ -127,7 +130,10 @@ class ParseSuite extends FunSuite {
     testTDMLObject.remove("path")
     val parseResult = Parse.Debugee.parseTDMLPath(testTDMLObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "missing 'tdmlConfig.path' field from launch request")
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "missing 'tdmlConfig.path' field from launch request"
+    )
   }
 
   test("Parse failed - invalid tdmlConfig - invalid action") {
@@ -136,17 +142,20 @@ class ParseSuite extends FunSuite {
     val parseResult = Parse.Debugee.parseTDML(testJsonObject, testTDMLObject)
     assertEquals(parseResult.isLeft, true)
     assertEquals(
-      parseResult.left.get.head,
-      "invalid 'tdmlConfig.action': 'InvalidAction', must be 'generate', 'append', or 'execute'"
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "invalid 'tdmlConfig.action': 'InvalidAction', must be 'generate', 'none', or 'execute'"
     )
   }
 
   test("Parse failed - Invalid Schema Path") {
-    schema = "badPath.dfdl.xsd"
+    schemaPath = "badPath.dfdl.xsd"
     buildJson()
     val parseResult = Parse.Debugee.LaunchArgs.parse(testJsonObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, s"schema file at $schema doesn't exist")
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      s"schema file at $schemaPath doesn't exist"
+    )
   }
 
   test("Parse failed - infosetOutputType not file") {
@@ -154,10 +163,14 @@ class ParseSuite extends FunSuite {
     buildJson()
     val parseResult = Parse.Debugee.LaunchArgs.parse(testJsonObject)
     assertEquals(parseResult.isLeft, true)
-    assertEquals(parseResult.left.get.head, "'type' field in 'infosetOutput' must be set to 'file'")
+    assertEquals(
+      parseResult.swap.toOption.map(_.head).getOrElse("no error"),
+      "'type' field in 'infosetOutput' must be set to 'file'"
+    )
   }
 
   def buildJson(): Unit = {
+    schema.addProperty("path", schemaPath)
 
     val infoset = new JsonObject()
     infoset.addProperty("type", infosetOutputType)
@@ -165,13 +178,12 @@ class ParseSuite extends FunSuite {
 
     testTDMLObject.addProperty("action", tdmlAction)
     testTDMLObject.addProperty("name", tdmlName)
-    testTDMLObject.addProperty("description", tdmlDescription)
     testTDMLObject.addProperty("path", tdmlPath)
 
     testJsonObject.addProperty("name", name)
     testJsonObject.addProperty("request", request)
     testJsonObject.addProperty("type", launchType)
-    testJsonObject.addProperty("schema", schema)
+    testJsonObject.add("schema", schema)
     testJsonObject.addProperty("data", data)
     testJsonObject.addProperty("debugServer", debugServer)
     testJsonObject.addProperty("infosetFormat", infosetFormat)

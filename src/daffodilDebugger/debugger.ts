@@ -18,8 +18,15 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
-import { regexp, getConfig } from '../utils'
+import { getConfig, setCurrentConfig } from '../utils'
 import { runDebugger, stopDebugger, stopDebugging } from './utils'
+import {
+  getDefaultTDMLTestCaseName,
+  getTestCaseDisplayData,
+  getTmpTDMLFilePath,
+  readTDMLFileContents,
+} from '../tdmlEditor/utilities/tdmlXmlUtils'
+import { outputChannel } from '../adapter/activateDaffodilDebug'
 
 // Function to get data file given a folder
 export async function getDataFileFromFolder(dataFolder: string) {
@@ -42,54 +49,63 @@ async function getTDMLConfig(
   config: vscode.DebugConfiguration
 ): Promise<boolean> {
   // If not supported TDML action entered, delete tdml config so no errors are thrown
-  if (!['execute', 'generate', 'append'].includes(config?.tdmlConfig?.action)) {
+  if (!['execute', 'generate', 'none'].includes(config?.tdmlConfig?.action)) {
     delete config.tdmlConfig
   }
 
   // If we are doing a TDML execute, these fields will be replaced,
   //   so we don't need to prompt for them now.
   if (config?.tdmlConfig?.action === 'execute') {
-    // Erase the value of `data` so that we aren't prompted for it later
-    // Might need to add `schema` here if we move the `Execute TDML` command
-    //   away from the detected dfdl language in VSCode.
+    // Erase the value of `data` and 'schema.path' so that we aren't prompted for it later
     config.data = ''
+    config.schema.path = ''
+
+    if (
+      config.tdmlConfig.path === '${command:AskForValidatedTDMLPath}' ||
+      !config.tdmlConfig.path
+    ) {
+      config.tdmlConfig.path = await vscode.commands.executeCommand(
+        'extension.dfdl-debug.getValidatedTDMLPath'
+      )
+    }
+
+    if (!config.tdmlConfig.path) {
+      return false
+    }
+
+    config.tdmlConfig.name =
+      config.tdmlConfig.name ||
+      (await vscode.commands.executeCommand(
+        'extension.dfdl-debug.getTDMLName',
+        config.tdmlConfig.path
+      ))
+
+    if (!config.tdmlConfig.name) return false
+
+    await readTDMLFileContents(config.tdmlConfig.path).then(
+      async (xmlBuffer) => {
+        await getTestCaseDisplayData(xmlBuffer).then((testSuiteData) => {
+          testSuiteData.testCases.forEach((testCase) => {
+            if (testCase.testCaseName === config.tdmlConfig.name) {
+              // Behave the same as the backend - if there are multiple data documents, ignore any past the first
+              config.data = testCase.dataDocuments[0]
+              config.schema.path = testCase.testCaseModel
+            }
+          })
+        })
+      }
+    )
   }
 
-  if (
-    config?.tdmlConfig?.action === 'generate' ||
-    config?.tdmlConfig?.action === 'append' ||
-    config?.tdmlConfig?.action === 'execute'
-  ) {
-    if (
-      config?.tdmlConfig?.name === undefined ||
-      config?.tdmlConfig?.name.includes('${command:AskForTDMLName}')
-    )
-      config.tdmlConfig.name = await vscode.commands.executeCommand(
-        'extension.dfdl-debug.getTDMLName'
-      )
+  if (config?.tdmlConfig?.action === 'generate') {
+    config.tdmlConfig.name =
+      config.tdmlConfig.name || getDefaultTDMLTestCaseName()
+    config.tdmlConfig.path = getTmpTDMLFilePath()
 
-    if (
-      config?.tdmlConfig?.description === undefined ||
-      config?.tdmlConfig?.description.includes(
-        '${command:AskForTDMLDescription}'
-      )
+    outputChannel.appendLine(
+      `TDML File generated at: ${config.tdmlConfig.path}`
     )
-      config.tdmlConfig.description = await vscode.commands.executeCommand(
-        'extension.dfdl-debug.getTDMLDescription'
-      )
-
-    if (
-      config?.tdmlConfig?.path === undefined ||
-      config?.tdmlConfig?.path.includes('${command:AskForTDMLPath}')
-    )
-      if (config?.tdmlConfig?.action === 'generate')
-        config.tdmlConfig.path = await vscode.commands.executeCommand(
-          'extension.dfdl-debug.getTDMLPath'
-        )
-      else
-        config.tdmlConfig.path = await vscode.commands.executeCommand(
-          'extension.dfdl-debug.getValidatedTDMLPath'
-        )
+    outputChannel.show()
   }
 
   if (config?.tdmlConfig?.action !== 'execute' && config.data === '') {
@@ -102,30 +118,25 @@ async function getTDMLConfig(
 async function getDaffodilDebugClasspath(
   config: vscode.DebugConfiguration,
   workspaceFolder: string
-): Promise<string> {
-  let daffodilDebugClasspath = ''
+): Promise<Array<string>> {
+  let daffodilDebugClasspath: Array<string> = []
 
   //check if each classpath still exists
   if (config.daffodilDebugClasspath) {
-    config.daffodilDebugClasspath.split(':').forEach((entry: string) => {
-      let fullpathEntry = entry.replaceAll(
-        '${workspaceFolder}',
-        workspaceFolder
-      )
-
-      if (!fs.existsSync(fullpathEntry)) {
-        throw new Error(`File or directory: ${fullpathEntry} doesn't exist`)
-      }
-    })
-
-    daffodilDebugClasspath = config.daffodilDebugClasspath.includes(
-      '${workspaceFolder}'
-    )
-      ? config.daffodilDebugClasspath.replace(
-          regexp['workspace'],
+    config.daffodilDebugClasspath.forEach((entry: string) => {
+      if (entry !== '') {
+        let fullpathEntry = entry.replaceAll(
+          '${workspaceFolder}',
           workspaceFolder
         )
-      : config.daffodilDebugClasspath
+
+        if (!fs.existsSync(fullpathEntry)) {
+          throw new Error(`File or directory: ${fullpathEntry} doesn't exist`)
+        } else {
+          daffodilDebugClasspath.push(fullpathEntry)
+        }
+      }
+    })
   }
 
   // make sure infoset output directory is present
@@ -149,28 +160,43 @@ async function getDaffodilDebugClasspath(
 export async function getDebugger(
   context: vscode.ExtensionContext,
   config: vscode.DebugConfiguration
-): Promise<vscode.DebugConfiguration | undefined> {
+) {
   config = getConfig(config) // make sure all config attributes are set
+  setCurrentConfig(config) // Do this here to make sure we have the config if there isn't a workspace (eg. during tests)
 
   if (vscode.workspace.workspaceFolders !== undefined) {
     await stopDebugger()
 
+    if (!(await getTDMLConfig(config))) {
+      return await stopDebugging().then((_) => undefined)
+    }
+
     // Get schema file before debugger starts to avoid timeout
-    if (config.schema.includes('${command:AskForSchemaName}')) {
-      config.schema = await vscode.commands.executeCommand(
+    if (config.schema.path.includes('${command:AskForSchemaName}')) {
+      const schemaPath = await vscode.commands.executeCommand(
         'extension.dfdl-debug.getSchemaName'
       )
+
+      // Stop execution if schemaPath is null, undefined, or empty string
+      if (!schemaPath) {
+        return await stopDebugging().then((_) => undefined)
+      }
+
+      config.schema.path = schemaPath
     }
 
     // Get data file before debugger starts to avoid timeout
     if (config.data.includes('${command:AskForDataName}')) {
-      config.data = await vscode.commands.executeCommand(
+      const dataPath = await vscode.commands.executeCommand(
         'extension.dfdl-debug.getDataName'
       )
-    }
 
-    if (!(await getTDMLConfig(config))) {
-      return await stopDebugging().then((_) => undefined)
+      // Stop execution if dataPath is null, undefined, or empty string
+      if (!dataPath) {
+        return await stopDebugging().then((_) => undefined)
+      }
+
+      config.data = dataPath
     }
 
     let workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath
@@ -181,16 +207,21 @@ export async function getDebugger(
       workspaceFolder
     )
 
+    setCurrentConfig(config)
+
     if (!config.useExistingServer) {
-      await runDebugger(
-        context.asAbsolutePath('./'),
+      let newDebugger = await runDebugger(
+        context.asAbsolutePath('./dist/debuggers'),
         daffodilDebugClasspath,
-        context.asAbsolutePath('./package.json'),
         config.debugServer,
         config.dfdlDebugger
       )
+
+      // This ensures the extension doesn't try to connect to the debugger if the debugger
+      // wasn't created
+      if (!newDebugger) {
+        return await stopDebugging().then((_) => undefined)
+      }
     }
   }
-
-  return config
 }
